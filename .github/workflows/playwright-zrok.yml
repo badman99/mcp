@@ -27,7 +27,7 @@ jobs:
           echo "📥 Downloading bore..."
           curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
           tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
-          echo "✅ bore installed: $(bore --version)"
+          echo "✅ bore ready!"
 
       - name: Install Playwright MCP
         run: |
@@ -35,13 +35,25 @@ jobs:
           npm install -g @playwright/mcp@latest
           echo "🌐 Installing Chromium + deps..."
           npx playwright install chromium --with-deps
-          echo "✅ Playwright MCP ready!"
+          echo "✅ Done!"
+
+      - name: Patch Chromium for no-sandbox
+        run: |
+          # Find chromium binary and wrap it with --no-sandbox
+          CHROMIUM_BIN=$(find ~/.cache/ms-playwright -type f -name 'chrome' -o -name 'chromium' 2>/dev/null | grep -v '\.1/' | head -1)
+          echo "Found chromium at: $CHROMIUM_BIN"
+          
+          sudo tee /usr/local/bin/chromium-sandbox-fix > /dev/null << WRAP
+          #!/bin/bash
+          exec "$CHROMIUM_BIN" --no-sandbox --disable-setuid-sandbox "\$@"
+          WRAP
+          sudo chmod +x /usr/local/bin/chromium-sandbox-fix
+          echo "✅ Chromium wrapper created!"
 
       - name: Start MCP Server + bore Tunnel
-        env:
-          PLAYWRIGHT_CHROMIUM_ARGS: "--no-sandbox --disable-setuid-sandbox"
         run: |
           echo "🚀 Starting Playwright MCP server..."
+          PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/local/bin/chromium-sandbox-fix \
           npx @playwright/mcp@latest \
             --headless \
             --port $PORT \
@@ -50,17 +62,24 @@ jobs:
             > mcp.log 2>&1 &
           MCP_PID=$!
 
-          # Wait for MCP /sse endpoint to be ready
-          echo "⏳ Waiting for MCP server..."
+          # ✅ FIX: nc se port check karo, curl /sse se NAHI (SSE hang karta hai!)
+          echo "⏳ Waiting for MCP server on port $PORT..."
           for i in {1..30}; do
-            if curl -s http://localhost:$PORT/sse > /dev/null 2>&1; then
-              echo "✅ MCP server ready on port $PORT"
+            if nc -z localhost $PORT 2>/dev/null; then
+              echo "✅ MCP server ready on port $PORT!"
               break
             fi
+            echo "  attempt $i/30..."
             sleep 2
+            # Show logs if stuck
+            if [ $i -eq 15 ]; then
+              echo "--- mcp.log so far ---"
+              cat mcp.log
+              echo "---"
+            fi
           done
 
-          # Check if MCP actually started
+          # Final check
           if ! kill -0 $MCP_PID 2>/dev/null; then
             echo "❌ MCP server failed to start. Logs:"
             cat mcp.log
@@ -80,10 +99,9 @@ jobs:
             echo "========================================"
             echo "🎭 PLAYWRIGHT MCP LIVE AT:"
             echo "   SSE  → http://$BORE_URL/sse"
-            echo "   HTTP → http://$BORE_URL"
             echo "========================================"
             echo ""
-            echo "📝 opencode.jsonc config:"
+            echo "📝 opencode.jsonc mein ye daalo:"
             echo '{'
             echo '  "mcp": {'
             echo '    "playwright": {'
@@ -93,11 +111,11 @@ jobs:
             echo '  }'
             echo '}'
           else
-            echo "⚠️ Could not get bore URL. bore logs:"
+            echo "⚠️ bore URL nahi mili. bore logs:"
             cat bore.log
           fi
 
-          # Keep alive loop with auto-reconnect
+          # Keep alive loop
           while kill -0 $MCP_PID 2>/dev/null; do
             if ! kill -0 $BORE_PID 2>/dev/null; then
               echo "⚠️ bore tunnel died, restarting..."
