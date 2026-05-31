@@ -38,7 +38,7 @@ jobs:
       - name: Start MCP Server + bore Tunnel
         run: |
           # Start MCP server in background
-          npx @playwright/mcp@latest --headless --port $PORT --host 0.0.0.0 > mcp.log 2>&1 &
+          npx @playwright/mcp@latest --headless --port $PORT --host 0.0.0.0 --allowed-hosts '*' > mcp.log 2>&1 &
           MCP_PID=$!
           
           # Wait for MCP to be ready
