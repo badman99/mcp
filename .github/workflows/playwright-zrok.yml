@@ -25,10 +25,8 @@ jobs:
 
       - name: Install zrok
         run: |
-          # Download zrok directly from GitHub releases
-          ZROK_VERSION=$(curl -s https://api.github.com/repos/openziti/zrok/releases/latest | grep -o '"tag_name": "[^"]*"' | cut -d'"' -f4)
-          echo "📥 Downloading zrok $ZROK_VERSION..."
-          wget -q "https://github.com/openziti/zrok/releases/download/${ZROK_VERSION}/zrok_${ZROK_VERSION#v}_linux_amd64.tar.gz" -O zrok.tar.gz
+          echo "📥 Downloading zrok v2.0.4..."
+          wget -q "https://github.com/openziti/zrok/releases/download/v2.0.4/zrok_2.0.4_linux_amd64.tar.gz" -O zrok.tar.gz
           tar -xzf zrok.tar.gz
           chmod +x zrok
           sudo mv zrok /usr/local/bin/
