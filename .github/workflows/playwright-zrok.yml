@@ -36,28 +36,66 @@ jobs:
         run: |
           zrok enable $ZROK_TOKEN --headless
 
-      - name: Create share (if not exists)
-        run: |
-          zrok create share --share-token playwright-mcp-gha --backend-mode proxy --open || true
-
       - name: Install Playwright
         run: |
           npm install -g @playwright/mcp@latest
           npx playwright install chromium
 
-      - name: Start MCP Server
+      - name: Start MCP Server + zrok Tunnel
         run: |
-          npx @playwright/mcp@latest --headless --port $PORT --host 0.0.0.0 &
-          sleep 5
-          curl -s http://localhost:$PORT > /dev/null && echo "✅ MCP ready"
-
-      - name: Start zrok Tunnel
-        run: |
-          zrok share public localhost:$PORT --headless &
-          sleep 5
-          echo "🌐 zrok tunnel started"
-          # Keep job alive
-          while true; do
-            sleep 60
-            echo "⏳ $(date) - Tunnel running..."
+          # Start MCP server in background
+          npx @playwright/mcp@latest --headless --port $PORT --host 0.0.0.0 > mcp.log 2>&1 &
+          MCP_PID=$!
+          
+          # Wait for MCP to be ready
+          for i in {1..30}; do
+            if curl -s http://localhost:$PORT > /dev/null 2>&1; then
+              echo "✅ MCP server ready on port $PORT"
+              break
+            fi
+            sleep 1
           done
+          
+          # Check if MCP started
+          if ! kill -0 $MCP_PID 2>/dev/null; then
+            echo "❌ MCP server failed to start"
+            cat mcp.log
+            exit 1
+          fi
+          
+          # Create persistent share with static token (no --open flag!)
+          echo "🔗 Creating zrok share..."
+          zrok create share public --backend-mode proxy --share-token playwright-mcp-gha $PORT --headless || true
+          
+          # Also start an ephemeral share to get a working URL immediately
+          echo "🌐 Starting zrok tunnel..."
+          zrok share public localhost:$PORT --headless > zrok.log 2>&1 &
+          ZROK_PID=$!
+          
+          # Wait and extract URL
+          sleep 5
+          ZROK_URL=$(grep -oE '[a-zA-Z0-9]+\.shares\.zrok\.io' zrok.log | head -1)
+          
+          if [ -n "$ZROK_URL" ]; then
+            echo ""
+            echo "========================================"
+            echo "🚀 MCP SERVER LIVE AT:"
+            echo "https://$ZROK_URL"
+            echo "========================================"
+            echo ""
+          else
+            echo "⚠️ Could not extract zrok URL, showing logs:"
+            cat zrok.log
+          fi
+          
+          # Keep both processes alive
+          while kill -0 $MCP_PID 2>/dev/null && kill -0 $ZROK_PID 2>/dev/null; do
+            sleep 60
+            echo "⏳ $(date) - Server running..."
+          done
+          
+          echo "❌ One of the processes died. MCP log:"
+          cat mcp.log
+          echo "Zrok log:"
+          cat zrok.log
+          exit 1
