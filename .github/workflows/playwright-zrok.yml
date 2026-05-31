@@ -40,11 +40,6 @@ jobs:
         run: |
           zrok enable $ZROK_TOKEN
 
-      - name: Reserve static URL
-        run: |
-          zrok reserve public localhost:$PORT -n playwright-mcp-gha || true
-          echo "✅ URL: https://playwright-mcp-gha.share.zrok.io"
-
       - name: Install Playwright
         run: |
           npm install -g @playwright/mcp@latest
@@ -56,7 +51,8 @@ jobs:
           sleep 5
           curl -s http://localhost:$PORT > /dev/null && echo "✅ MCP ready"
 
-      - name: Start Tunnel
+      - name: Start zrok Tunnel
         run: |
-          echo "🌐 https://playwright-mcp-gha.share.zrok.io"
-          zrok share reserved playwright-mcp-gha
+          echo "🌐 Starting zrok tunnel..."
+          echo "🔗 URL: https://playwright-mcp-gha.share.zrok.io"
+          zrok share public localhost:$PORT --unique-name playwright-mcp-gha
