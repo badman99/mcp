@@ -28,6 +28,7 @@ jobs:
           echo "📥 Downloading zrok v2.0.4..."
           wget -q "https://github.com/openziti/zrok/releases/download/v2.0.4/zrok_2.0.4_linux_amd64.tar.gz" -O zrok.tar.gz
           tar -xzf zrok.tar.gz
+          mv zrok2 zrok
           chmod +x zrok
           sudo mv zrok /usr/local/bin/
           zrok version
