@@ -42,16 +42,39 @@ jobs:
 
       - name: Install zrok
         run: |
-          echo "🔍 Getting latest zrok release URL..."
-          ZROK_URL=$(curl -s https://api.github.com/repos/openziti/zrok/releases/latest | grep -o 'browser_download_url.*linux-amd64.*tar.gz"' | head -1 | cut -d '"' -f 4)
-          if [ -z "$ZROK_URL" ]; then
-            echo "❌ Failed to get zrok download URL"
-            exit 1
+          echo "🔍 Installing zrok..."
+          # Method 1: Try official install script
+          if curl -s https://get.zrok.io | bash; then
+            echo "✅ zrok installed via script"
+          else
+            # Method 2: Direct download with Python parsing
+            echo "📥 Trying direct download..."
+            python3 -c "
+import urllib.request, json, sys
+url = 'https://api.github.com/repos/openziti/zrok/releases/latest'
+req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+try:
+    response = urllib.request.urlopen(req)
+    data = json.loads(response.read().decode())
+    for asset in data.get('assets', []):
+        name = asset.get('name', '')
+        if 'linux' in name and 'amd64' in name and '.tar.gz' in name:
+            download_url = asset['browser_download_url']
+            print(f'Found: {download_url}')
+            # Download it
+            req2 = urllib.request.Request(download_url, headers={'User-Agent': 'Mozilla/5.0'})
+            response2 = urllib.request.urlopen(req2)
+            with open('zrok.tar.gz', 'wb') as f:
+                f.write(response2.read())
+            print('✅ Downloaded')
+            break
+except Exception as e:
+    print(f'Error: {e}')
+    sys.exit(1)
+"
+            tar -xzf zrok.tar.gz -C /usr/local/bin zrok 2>/dev/null || tar -xzf zrok.tar.gz && mv zrok /usr/local/bin/
+            chmod +x /usr/local/bin/zrok
           fi
-          echo "📥 Downloading zrok from: $ZROK_URL"
-          wget -q "$ZROK_URL" -O zrok-linux-amd64.tar.gz
-          tar -xzf zrok-linux-amd64.tar.gz -C /usr/local/bin zrok
-          chmod +x /usr/local/bin/zrok
           zrok version
 
       - name: Enable zrok environment
@@ -95,9 +118,3 @@ jobs:
           
           # Start zrok tunnel (this will block)
           zrok share reserved playwright-mcp-gha
-
-      - name: Keep alive (fallback)
-        if: failure()
-        run: |
-          echo "⚠️ Tunnel stopped. Keeping job alive for restart..."
-          sleep 3600
