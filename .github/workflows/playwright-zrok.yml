@@ -27,18 +27,18 @@ jobs:
         run: |
           echo "📥 Downloading zrok v2.0.4..."
           wget -q "https://github.com/openziti/zrok/releases/download/v2.0.4/zrok_2.0.4_linux_amd64.tar.gz" -O zrok.tar.gz
-          ls -la zrok.tar.gz
-          tar -tzf zrok.tar.gz
           tar -xzf zrok.tar.gz
-          ls -la
           mv zrok2 zrok
           chmod +x zrok
           sudo mv zrok /usr/local/bin/
-          zrok version
 
       - name: Enable zrok
         run: |
-          zrok enable $ZROK_TOKEN
+          zrok enable $ZROK_TOKEN --headless
+
+      - name: Create share (if not exists)
+        run: |
+          zrok create share --share-token playwright-mcp-gha --backend-mode proxy --open || true
 
       - name: Install Playwright
         run: |
@@ -53,6 +53,11 @@ jobs:
 
       - name: Start zrok Tunnel
         run: |
-          echo "🌐 Starting zrok tunnel..."
-          echo "🔗 URL: https://playwright-mcp-gha.share.zrok.io"
-          zrok share public localhost:$PORT --unique-name playwright-mcp-gha
+          zrok share public localhost:$PORT --headless &
+          sleep 5
+          echo "🌐 zrok tunnel started"
+          # Keep job alive
+          while true; do
+            sleep 60
+            echo "⏳ $(date) - Tunnel running..."
+          done
