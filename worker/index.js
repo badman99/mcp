@@ -117,8 +117,17 @@ export default {
       );
     }
 
+    // ─── MCP path rewrite ─────────────────────────────────────────
+    // Playwright MCP server /sse ke baad /message pe POST karta hai,
+    // par router sirf /playwright/* ko port 3002 pe bhejta hai.
+    // Isliye /message, /mcp, /sse ko /playwright/... rewrite karna zaroori hai.
+    let proxyPath = path;
+    if (path === '/sse' || path.startsWith('/message') || path === '/mcp') {
+      proxyPath = '/playwright' + path;
+    }
+
     // Build target URL
-    const targetUrl = tunnelUrl + path + url.search;
+    const targetUrl = tunnelUrl + proxyPath + url.search;
 
     // SSE ke liye special handling
     const isSSE = request.headers.get('Accept') === 'text/event-stream';

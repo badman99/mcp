@@ -2,12 +2,11 @@ name = "playwright-runner"
 main = "index.js"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
+account_id = "d719004ac743092c8497261c60420b96"
 
-# KV Namespace - CF dashboard mein banao
-# `wrangler kv namespace create RUNNER_KV` se bhi ban sakta hai
 [[kv_namespaces]]
 binding = "KV"
-id = "REPLACE_WITH_YOUR_KV_NAMESPACE_ID"
+id = "882a7bf7bac24c309fd276a4e8a6ff5e"
 
 # Secrets (wrangler secret put se set karo, kabhi yahan mat likhna!)
 # AUTH_TOKEN    — Runner <-> Worker shared secret
