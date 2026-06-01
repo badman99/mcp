@@ -8,7 +8,11 @@ on:
     - cron: '0 */4 * * *'
 
 env:
-  PORT: 3002
+  MCP_PORT: 3002
+  STORAGE_PORT: 3003
+  ROUTER_PORT: 8080
+  SCREENSHOTS_DIR: /tmp/storage/screenshots
+  UPLOADS_DIR: /tmp/storage/uploads
 
 jobs:
   server:
@@ -22,111 +26,128 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install bore
+      - name: Install dependencies
         run: |
-          echo "📥 Downloading bore..."
-          curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
-          tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
-          echo "✅ bore ready!"
-
-      - name: Install Playwright MCP
-        run: |
-          echo "📦 Installing @playwright/mcp..."
-          npm install -g @playwright/mcp@latest
-          echo "🌐 Installing chrome-for-testing + deps..."
-          npx @playwright/mcp install-browser chrome-for-testing
+          echo "📦 Installing tools..."
+          npm install -g @playwright/mcp@latest serve
           npx playwright install chrome --with-deps
-          echo "✅ Done!"
+          
+          # cloudflared install
+          curl -sL https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb -o cloudflared.deb
+          sudo dpkg -i cloudflared.deb
+          echo "✅ All dependencies ready!"
 
-      - name: Patch Chrome for no-sandbox
+      - name: Setup Chrome no-sandbox wrapper
         run: |
           CHROME_BIN=$(find ~/.cache/ms-playwright -type f -name 'chrome' 2>/dev/null | head -1)
-          echo "Found chrome at: $CHROME_BIN"
-          sudo tee /usr/local/bin/chrome-sandbox-fix > /dev/null << WRAP
+          echo "🔍 Chrome found: $CHROME_BIN"
+          sudo tee /usr/local/bin/chrome-nosandbox > /dev/null << WRAP
           #!/bin/bash
           exec "$CHROME_BIN" --no-sandbox --disable-setuid-sandbox "\$@"
           WRAP
-          sudo chmod +x /usr/local/bin/chrome-sandbox-fix
-          echo "✅ Chrome wrapper created!"
+          sudo chmod +x /usr/local/bin/chrome-nosandbox
+          echo "✅ Chrome wrapper ready!"
 
-      - name: Start MCP Server + bore Tunnel
+      - name: Create storage directories
         run: |
-          echo "🚀 Starting Playwright MCP server..."
-          PLAYWRIGHT_CHROME_EXECUTABLE_PATH=/usr/local/bin/chrome-sandbox-fix \
+          mkdir -p $SCREENSHOTS_DIR $UPLOADS_DIR
+          echo "✅ Storage dirs ready!"
+
+      - name: Start Playwright MCP
+        run: |
+          echo "🎭 Starting Playwright MCP on :$MCP_PORT..."
+          PLAYWRIGHT_CHROME_EXECUTABLE_PATH=/usr/local/bin/chrome-nosandbox \
           npx @playwright/mcp@latest \
             --headless \
-            --port $PORT \
-            --host 0.0.0.0 \
+            --port $MCP_PORT \
+            --host 127.0.0.1 \
             --browser chrome-for-testing \
             --allowed-origins '*' \
             --allowed-hosts '*' \
-            > mcp.log 2>&1 &
-          MCP_PID=$!
+            --output-dir $SCREENSHOTS_DIR \
+            > /tmp/mcp.log 2>&1 &
 
-          echo "⏳ Waiting for MCP server on port $PORT..."
+          # Wait for MCP
           for i in {1..30}; do
-            if nc -z localhost $PORT 2>/dev/null; then
-              echo "✅ MCP server ready on port $PORT!"
-              break
-            fi
-            echo "  attempt $i/30..."
+            nc -z localhost $MCP_PORT 2>/dev/null && echo "✅ MCP ready!" && break
+            [ $i -eq 30 ] && echo "❌ MCP failed!" && cat /tmp/mcp.log && exit 1
             sleep 2
-            if [ $i -eq 15 ]; then
-              echo "--- mcp.log so far ---"
-              cat mcp.log
-              echo "---"
-            fi
           done
 
-          if ! kill -0 $MCP_PID 2>/dev/null; then
-            echo "❌ MCP server failed to start. Logs:"
-            cat mcp.log
+      - name: Start Storage File Server
+        run: |
+          echo "📁 Starting storage server on :$STORAGE_PORT..."
+          serve /tmp/storage \
+            --listen $STORAGE_PORT \
+            --no-clipboard \
+            --cors \
+            > /tmp/storage.log 2>&1 &
+          sleep 2
+          nc -z localhost $STORAGE_PORT && echo "✅ Storage server ready!" || echo "⚠️ Storage server issue"
+
+      - name: Start Local Router
+        run: |
+          echo "🚦 Starting router on :$ROUTER_PORT..."
+          node scripts/router.js > /tmp/router.log 2>&1 &
+          sleep 2
+          curl -sf http://localhost:$ROUTER_PORT/health > /dev/null && echo "✅ Router ready!" || (cat /tmp/router.log && exit 1)
+
+      - name: Start Cloudflare Tunnel + Register with Worker
+        env:
+          AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+          WORKER_URL: ${{ secrets.WORKER_URL }}
+        run: |
+          echo "☁️ Starting Cloudflare Quick Tunnel..."
+          cloudflared tunnel --url http://localhost:$ROUTER_PORT \
+            --logfile /tmp/cloudflared.log \
+            --no-autoupdate \
+            > /tmp/cf.log 2>&1 &
+          CF_PID=$!
+
+          # Tunnel URL milne ka wait karo
+          echo "⏳ Waiting for tunnel URL..."
+          for i in {1..30}; do
+            TUNNEL_URL=$(grep -oE 'https://[a-z0-9-]+\.trycloudflare\.com' /tmp/cloudflared.log 2>/dev/null | head -1)
+            [ -n "$TUNNEL_URL" ] && break
+            sleep 2
+          done
+
+          if [ -z "$TUNNEL_URL" ]; then
+            echo "❌ Tunnel URL nahi mili!"
+            cat /tmp/cloudflared.log
             exit 1
           fi
 
-          # Start bore tunnel
-          echo "🌐 Starting bore tunnel..."
-          bore local $PORT --to bore.pub > bore.log 2>&1 &
-          BORE_PID=$!
-          sleep 5
+          echo ""
+          echo "╔══════════════════════════════════════════════╗"
+          echo "║  🌐 TUNNEL: $TUNNEL_URL"
+          echo "╠══════════════════════════════════════════════╣"
+          echo "║  🎭 MCP:     $WORKER_URL/playwright/sse"
+          echo "║  📁 Storage: $WORKER_URL/storage/"
+          echo "╚══════════════════════════════════════════════╝"
+          echo ""
 
-          BORE_URL=$(grep -oE 'bore\.pub:[0-9]+' bore.log | head -1)
+          # Worker ko register karo
+          echo "📡 Registering with Worker..."
+          REGISTER_RESP=$(curl -sf -X POST "$WORKER_URL/register" \
+            -H "Content-Type: application/json" \
+            -H "X-Auth-Token: $AUTH_TOKEN" \
+            -d "{\"tunnelUrl\": \"$TUNNEL_URL\"}" 2>&1)
+          
+          echo "Worker response: $REGISTER_RESP"
+          echo "✅ Runner registered!"
 
-          if [ -n "$BORE_URL" ]; then
-            echo ""
-            echo "========================================"
-            echo "🎭 PLAYWRIGHT MCP LIVE AT:"
-            echo "   SSE  → http://$BORE_URL/sse"
-            echo "========================================"
-            echo ""
-            echo "📝 opencode.jsonc mein ye daalo:"
-            echo '{'
-            echo '  "mcp": {'
-            echo '    "playwright": {'
-            echo '      "type": "sse",'
-            echo "      \"url\": \"http://$BORE_URL/sse\""
-            echo '    }'
-            echo '  }'
-            echo '}'
-          else
-            echo "⚠️ bore URL nahi mili. bore logs:"
-            cat bore.log
-          fi
-
-          # Keep alive loop
-          while kill -0 $MCP_PID 2>/dev/null; do
-            if ! kill -0 $BORE_PID 2>/dev/null; then
-              echo "⚠️ bore tunnel died, restarting..."
-              bore local $PORT --to bore.pub > bore.log 2>&1 &
-              BORE_PID=$!
-              sleep 5
-              BORE_URL=$(grep -oE 'bore\.pub:[0-9]+' bore.log | tail -1)
-              [ -n "$BORE_URL" ] && echo "🔄 Reconnected: http://$BORE_URL/sse"
-            fi
-            sleep 60
-            echo "⏳ $(date) - Server running..."
+          # Keep alive — re-register every 30 min + check processes
+          while kill -0 $CF_PID 2>/dev/null; do
+            sleep 1800
+            echo "🔄 $(date) - Re-registering with worker..."
+            curl -sf -X POST "$WORKER_URL/register" \
+              -H "Content-Type: application/json" \
+              -H "X-Auth-Token: $AUTH_TOKEN" \
+              -d "{\"tunnelUrl\": \"$TUNNEL_URL\"}" || true
+            echo "⏳ $(date) - Still running..."
           done
 
-          echo "❌ MCP server died. Logs:"
-          cat mcp.log
+          echo "❌ Cloudflare tunnel died!"
+          cat /tmp/cloudflared.log
           exit 1
