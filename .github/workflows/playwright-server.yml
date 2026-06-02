@@ -235,16 +235,21 @@ jobs:
 
           # ─── Verify registration ────────────────────────────────
           sleep 2
-          for entry in "$MCP_PORT:$MCP_TUNNEL:$PLAYWRIGHT_WORKER" "$TERMINAL_PORT:$TERMINAL_TUNNEL:$TERMINAL_WORKER" "$WEBDAV_PORT:$WEBDAV_TUNNEL:$WEBDAV_WORKER"; do
-            IFS='|' read -r port tunnel worker <<< "$(echo "$entry" | sed 's/:/|/1; s/:/|/1')"
-            reg_url=$(curl -sf --max-time 3 "$worker/health" 2>/dev/null | grep -oE '"tunnelUrl":"[^"]*"' | head -1 | cut -d'"' -f4)
+          verify_worker() {
+            local port="$1"
+            local tunnel="$2"
+            local worker="$3"
+            local reg_url=$(curl -sf --max-time 3 "$worker/health" 2>/dev/null | grep -oE '"tunnelUrl":"[^"]*"' | head -1 | cut -d'"' -f4)
             if [ "$reg_url" != "$tunnel" ]; then
               echo "⚠️ Worker :$port has stale URL ($reg_url), forcing re-register..."
               register_worker "$worker" "$tunnel"
             else
               echo "✅ Worker :$port verified ($tunnel)"
             fi
-          done
+          }
+          verify_worker "$MCP_PORT" "$MCP_TUNNEL" "$PLAYWRIGHT_WORKER"
+          verify_worker "$TERMINAL_PORT" "$TERMINAL_TUNNEL" "$TERMINAL_WORKER"
+          verify_worker "$WEBDAV_PORT" "$WEBDAV_TUNNEL" "$WEBDAV_WORKER"
           echo "✅ All runners registered!"
 
           # ─── Watchdog Loop ──────────────────────────────────────
