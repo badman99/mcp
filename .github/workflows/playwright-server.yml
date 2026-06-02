@@ -250,26 +250,28 @@ jobs:
             fi
 
             # --- Bore tunnel health checks ---
-            for entry in "$MCP_PORT:$MCP_TUNNEL:$PLAYWRIGHT_WORKER" "$TERMINAL_PORT:$TERMINAL_TUNNEL:$TERMINAL_WORKER" "$WEBDAV_PORT:$WEBDAV_TUNNEL:$WEBDAV_WORKER"; do
-              IFS=: read -r port tunnel worker <<< "$entry"
-              bore_log="/tmp/bore-${port}.log"
-              bore_url=$(grep -oE 'bore\.pub:[0-9]+' "$bore_log" 2>/dev/null | head -1)
+            check_bore() {
+              local port="$1"
+              local tunnel="$2"
+              local worker="$3"
+              local bore_log="/tmp/bore-${port}.log"
+              local bore_url=$(grep -oE 'bore\.pub:[0-9]+' "$bore_log" 2>/dev/null | head -1)
 
               if [ -z "$bore_url" ]; then
                 echo "🔴 $(date) — Bore for :$port died! Reconnecting..."
-                new_tunnel=$(start_bore $port) || continue
+                local new_tunnel=$(start_bore $port) || return
                 case $port in
                   $MCP_PORT) MCP_TUNNEL="$new_tunnel" ;;
                   $TERMINAL_PORT) TERMINAL_TUNNEL="$new_tunnel" ;;
                   $WEBDAV_PORT) WEBDAV_TUNNEL="$new_tunnel" ;;
                 esac
                 register_worker "$worker" "$new_tunnel"
-                continue
+                return
               fi
 
-              if ! curl -sf --max-time 8 "http://$bore_url/health" > /dev/null 2>&1; then
-                echo "🔴 $(date) — Tunnel :$port health failed! Reconnecting..."
-                new_tunnel=$(start_bore $port) || continue
+              if ! curl -sf --max-time 8 "http://$bore_url/" > /dev/null 2>&1; then
+                echo "🔴 $(date) — Tunnel :$port unreachable! Reconnecting..."
+                local new_tunnel=$(start_bore $port) || return
                 case $port in
                   $MCP_PORT) MCP_TUNNEL="$new_tunnel" ;;
                   $TERMINAL_PORT) TERMINAL_TUNNEL="$new_tunnel" ;;
@@ -277,7 +279,11 @@ jobs:
                 esac
                 register_worker "$worker" "$new_tunnel"
               fi
-            done
+            }
+
+            check_bore "$MCP_PORT" "$MCP_TUNNEL" "$PLAYWRIGHT_WORKER"
+            check_bore "$TERMINAL_PORT" "$TERMINAL_TUNNEL" "$TERMINAL_WORKER"
+            check_bore "$WEBDAV_PORT" "$WEBDAV_TUNNEL" "$WEBDAV_WORKER"
 
             # --- Periodic re-register every 30 min ---
             NOW=$(date +%s)
