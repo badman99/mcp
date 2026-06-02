@@ -41,8 +41,8 @@ jobs:
           npx playwright install-deps chromium
 
           echo "🥷 Installing CloakBrowser stealth binary..."
-          npm install -g cloakbrowser playwright-core
-          node -e "const {ensureBinary}=require('cloakbrowser');ensureBinary().then(p=>console.log('✅ Binary:',p))"
+          npm install cloakbrowser playwright-core
+          node --input-type=module -e "import{ensureBinary}from'cloakbrowser';const p=await ensureBinary();console.log('✅ Binary:',p)"
           CLOAK_PATH=$(find ~/.cloakbrowser -name "chrome" -type f | head -1)
           if [ -z "$CLOAK_PATH" ]; then
             echo "❌ CloakBrowser binary not found!"
