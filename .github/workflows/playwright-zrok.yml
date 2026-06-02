@@ -159,12 +159,14 @@ jobs:
           TUNNEL_URL="http://$BORE_URL"
 
           echo ""
-          echo "╔══════════════════════════════════════════════╗"
-          echo "║  🌐 TUNNEL: $TUNNEL_URL"
-          echo "╠══════════════════════════════════════════════╣"
-          echo "║  🎭 MCP:     $WORKER_URL/playwright/sse"
-          echo "║  📁 Storage: $WORKER_URL/storage/"
-          echo "╚══════════════════════════════════════════════╝"
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║  🌐 TUNNEL:    $TUNNEL_URL"
+          echo "╠══════════════════════════════════════════════════╣"
+          echo "║  🎭 MCP:      $WORKER_URL/playwright/sse"
+          echo "║  🖥️ Terminal: $WORKER_URL/terminal/sse"
+          echo "║  📁 Storage:  $WORKER_URL/storage/"
+          echo "║  📂 WebDAV:   $WORKER_URL/storage-dav/"
+          echo "╚══════════════════════════════════════════════════╝"
           echo ""
 
           # Worker ko register karo
