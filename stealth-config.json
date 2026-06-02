@@ -59,7 +59,7 @@
         "Upgrade-Insecure-Requests": "1"
       }
     },
-    "initScript": ["scripts/stealth-init.js"]
+    "initScript": []
   },
   "server": {
     "port": 3002,
