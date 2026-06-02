@@ -99,8 +99,8 @@ jobs:
 
       - name: Start WebDAV Server
         run: |
-          echo "📂 Starting rclone WebDAV on :$WEBDAV_PORT (serving /tmp/storage)..."
-          rclone serve webdav /tmp/storage \
+          echo "📂 Starting rclone WebDAV on :$WEBDAV_PORT (serving /)..."
+          rclone serve webdav / \
             --addr 0.0.0.0:$WEBDAV_PORT \
             --allow-origin '*' \
             --no-checksum \
@@ -188,7 +188,7 @@ jobs:
             echo "🔄 Restarting WebDAV on :$WEBDAV_PORT..."
             fuser -k $WEBDAV_PORT/tcp 2>/dev/null || true
             sleep 1
-            rclone serve webdav /tmp/storage \
+            rclone serve webdav / \
               --addr 0.0.0.0:$WEBDAV_PORT \
               --allow-origin '*' \
               --no-checksum \
