@@ -1,18 +1,19 @@
-# Playwright MCP Server - GitHub Actions
+# MCP Server - GitHub Actions
 
-🎭 **Full browser automation server** running on GitHub Actions with **tunnel** via bore.pub.
+🎭 **Full browser automation + terminal + file access** running on GitHub Actions via bore.pub tunnels.
 
 ## 🚀 Quick Start
 
-### 1. Set Secrets
-Go to **Settings → Secrets and variables → Actions** and add:
-- `AUTH_TOKEN` - Shared auth token for Worker ↔ Runner
-
-### 2. Trigger Workflow
+### 1. Trigger Workflow
 Go to **Actions → Playwright MCP Server → Run workflow**
 
-### 3. Get Your URL
-The workflow will output your **tunnel URL** via bore.pub.
+### 2. Service URLs
+
+| Service | URL |
+|---|---|
+| 🎭 Playwright MCP | `https://playwright-runner.badman993944.workers.dev/sse` |
+| 🖥️ Terminal MCP | `https://terminal-runner.badman993944.workers.dev/sse` |
+| 📂 WebDAV | `https://webdav-runner.badman993944.workers.dev/` |
 
 ## 📝 OpenCode Config
 
@@ -23,57 +24,44 @@ Add this to your `opencode.jsonc`:
   "mcp": {
     "playwright": {
       "type": "http",
-      "url": "WORKER_URL/playwright/sse"
+      "url": "https://playwright-runner.badman993944.workers.dev/sse"
+    },
+    "terminal": {
+      "type": "http",
+      "url": "https://terminal-runner.badman993944.workers.dev/sse"
     }
   }
 }
 ```
 
-**URL updates per tunnel restart!** 🔥
-
 ## ⏰ Auto-Restart
-The workflow auto-triggers every 5 hours to keep the server alive!
+The workflow auto-triggers every 4 hours to keep the server alive!
 
 ## 🛠️ Features
 - ✅ All 23 Playwright MCP tools
-- ✅ Headless Chromium browser
-- ✅ Static URL (never changes)
-- ✅ Auto-restart every 5 hours
-- ✅ Network monitoring, screenshots, JS execution
-
-## 📡 Available Tools
-- `browser_navigate` - Open any URL
-- `browser_click` - Click elements
-- `browser_type` - Fill inputs
-- `browser_take_screenshot` - Screenshots
-- `browser_evaluate` - Run JavaScript
-- `browser_network_requests` - Monitor network
-- `browser_file_upload` - Upload files
-- `browser_fill_form` - Form automation
-- + 14 more tools!
+- ✅ Headless Chromium browser (stealth mode)
+- ✅ Terminal MCP (persistent shell access)
+- ✅ WebDAV file server (mountable as network drive)
+- ✅ Each service has its own bore tunnel + Cloudflare Worker
+- ✅ Auto-restart crashed services (watchdog every 5s)
+- ✅ Auto-reconnect bore tunnels on disconnect
 
 ## 🎯 How It Works
 
 ```
-GitHub Actions Runner (Ubuntu, 6h max)
-├── Playwright MCP Server (port 3002)
-└── bore.pub Tunnel
-    └── http://bore.pub:XXXXX
+GitHub Actions Runner (Ubuntu)
+├── Playwright MCP :3002 → bore.pub → playwright-runner.worker.dev
+├── Terminal MCP   :3004 → bore.pub → terminal-runner.worker.dev
+└── WebDAV         :3005 → bore.pub → webdav-runner.worker.dev
 ```
 
-**Note:** GitHub Actions has a 6-hour limit. The workflow auto-restarts every 5 hours to maintain continuous uptime!
-
-## 🔧 Manual Control
-
-**Start:** Actions → Run workflow → `start`
-**Stop:** Actions → Run workflow → `stop` (cancels running job)
+Each service is independent — one crashing doesn't affect others!
 
 ## ⚠️ Limitations
 - Max 6 hours per run (GitHub limit)
-- Auto-restarts every 5 hours
+- Auto-restarts every 4 hours
 - Need to re-trigger manually if Actions disabled
 
 ---
 
-**Enjoy full browser automation!** 🎭🔥
-# Triggered Sun May 31 14:39:55 UTC 2026
+**Enjoy full remote automation!** 🎭🔥

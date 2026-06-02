@@ -11,9 +11,12 @@ env:
   MCP_PORT: 3002
   TERMINAL_PORT: 3004
   WEBDAV_PORT: 3005
-  ROUTER_PORT: 8080
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
+  PLAYWRIGHT_WORKER: https://playwright-runner.badman993944.workers.dev
+  TERMINAL_WORKER: https://terminal-runner.badman993944.workers.dev
+  WEBDAV_WORKER: https://webdav-runner.badman993944.workers.dev
+  AUTH_TOKEN: mcp-runner-2026
 
 jobs:
   server:
@@ -34,19 +37,16 @@ jobs:
           npx @playwright/mcp install-browser chromium
           npx playwright install-deps chromium
 
-          # terminal-mcp-server + mcp-proxy
           echo "🖥️ Installing terminal-mcp-server..."
           git clone https://github.com/weidwonder/terminal-mcp-server.git /tmp/terminal-mcp
           cd /tmp/terminal-mcp && npm install && npm run build
           cd -
           pip install mcp-proxy
 
-          # rclone (WebDAV server ke liye)
           echo "☁️ Installing rclone..."
           curl -s https://rclone.org/install.sh | sudo bash
           echo "✅ rclone $(rclone --version | head -1) ready!"
 
-          # bore.pub install
           echo "📥 Downloading bore..."
           curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
           tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
@@ -58,25 +58,21 @@ jobs:
           echo "✅ Storage dirs ready!"
 
       - name: Start Playwright MCP
-        env:
-          PLAYWRIGHT_MCP_BROWSER: chromium
-          PLAYWRIGHT_MCP_HEADLESS: true
-          PLAYWRIGHT_MCP_USER_AGENT: "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         run: |
           echo "🎭 Starting Playwright MCP on :$MCP_PORT..."
+          PLAYWRIGHT_MCP_BROWSER=chromium PLAYWRIGHT_MCP_HEADLESS=true \
+          PLAYWRIGHT_MCP_USER_AGENT="Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36" \
           npx @playwright/mcp@latest \
             --config stealth-config.json \
             --headless \
             --port $MCP_PORT \
-            --host 127.0.0.1 \
+            --host 0.0.0.0 \
             --isolated \
             --no-sandbox \
             --allowed-origins '*' \
             --allowed-hosts '*' \
             --output-dir $SCREENSHOTS_DIR \
             > /tmp/mcp.log 2>&1 &
-
-          # Wait for MCP
           for i in {1..30}; do
             nc -z localhost $MCP_PORT 2>/dev/null && echo "✅ MCP ready!" && break
             [ $i -eq 30 ] && echo "❌ MCP failed!" && cat /tmp/mcp.log && exit 1
@@ -85,15 +81,15 @@ jobs:
 
       - name: Start Terminal MCP
         run: |
-          echo "🖥️ Starting terminal MCP on :3004 via mcp-proxy..."
+          echo "🖥️ Starting terminal MCP on :$TERMINAL_PORT..."
           mcp-proxy \
-            --port 3004 \
+            --port $TERMINAL_PORT \
             --host 0.0.0.0 \
             --allow-origin '*' \
             -- node /tmp/terminal-mcp/build/index.js \
             > /tmp/terminal.log 2>&1 &
           sleep 4
-          if nc -z localhost 3004; then
+          if nc -z localhost $TERMINAL_PORT; then
             echo "✅ Terminal MCP ready!"
           else
             echo "❌ Terminal MCP failed!"
@@ -103,9 +99,9 @@ jobs:
 
       - name: Start WebDAV Server
         run: |
-          echo "📂 Starting rclone WebDAV server on :$WEBDAV_PORT (serving /)..."
-          rclone serve webdav / \
-            --addr 127.0.0.1:$WEBDAV_PORT \
+          echo "📂 Starting rclone WebDAV on :$WEBDAV_PORT (serving /tmp/storage)..."
+          rclone serve webdav /tmp/storage \
+            --addr 0.0.0.0:$WEBDAV_PORT \
             --allow-origin '*' \
             --no-checksum \
             --vfs-links \
@@ -114,23 +110,39 @@ jobs:
             > /tmp/webdav.log 2>&1 &
           sleep 3
           nc -z localhost $WEBDAV_PORT \
-            && echo "✅ WebDAV server ready!" \
+            && echo "✅ WebDAV ready!" \
             || (echo "⚠️ WebDAV issue:" && cat /tmp/webdav.log)
 
-      - name: Start Local Router
+      - name: Start Tunnels + Watchdog
         run: |
-          echo "🚦 Starting router on :$ROUTER_PORT..."
-          node scripts/router.js > /tmp/router.log 2>&1 &
-          sleep 2
-          curl -sf http://localhost:$ROUTER_PORT/health > /dev/null && echo "✅ Router ready!" || (cat /tmp/router.log && exit 1)
+          register_worker() {
+            local worker_url="$1"
+            local tunnel_url="$2"
+            echo "📡 Registering $tunnel_url → $worker_url"
+            curl -sf -X POST "$worker_url/register" \
+              -H "Content-Type: application/json" \
+              -H "X-Auth-Token: $AUTH_TOKEN" \
+              -d "{\"tunnelUrl\": \"$tunnel_url\"}" 2>&1 || true
+          }
 
-      - name: Start bore.pub Tunnel + Watchdog
-        env:
-          AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
-          WORKER_URL: ${{ secrets.WORKER_URL }}
-        run: |
+          start_bore() {
+            local port="$1"
+            local log="/tmp/bore-${port}.log"
+            rm -f "$log"
+            bore local $port --to bore.pub > "$log" 2>&1 &
+            local pid=$!
+            sleep 5
+            local url=$(grep -oE 'bore\.pub:[0-9]+' "$log" | head -1)
+            if [ -z "$url" ]; then
+              echo "❌ bore.pub URL not found for port $port!"
+              cat "$log"
+              return 1
+            fi
+            echo "http://$url"
+          }
+
           restart_mcp() {
-            echo "🔄 Restarting Playwright MCP on :$MCP_PORT..."
+            echo "🔄 Restarting MCP on :$MCP_PORT..."
             fuser -k $MCP_PORT/tcp 2>/dev/null || true
             sleep 1
             PLAYWRIGHT_MCP_BROWSER=chromium PLAYWRIGHT_MCP_HEADLESS=true \
@@ -139,7 +151,7 @@ jobs:
               --config stealth-config.json \
               --headless \
               --port $MCP_PORT \
-              --host 127.0.0.1 \
+              --host 0.0.0.0 \
               --isolated \
               --no-sandbox \
               --allowed-origins '*' \
@@ -155,7 +167,7 @@ jobs:
           }
 
           restart_terminal() {
-            echo "🔄 Restarting Terminal MCP on :$TERMINAL_PORT..."
+            echo "🔄 Restarting Terminal on :$TERMINAL_PORT..."
             fuser -k $TERMINAL_PORT/tcp 2>/dev/null || true
             sleep 1
             mcp-proxy \
@@ -176,8 +188,8 @@ jobs:
             echo "🔄 Restarting WebDAV on :$WEBDAV_PORT..."
             fuser -k $WEBDAV_PORT/tcp 2>/dev/null || true
             sleep 1
-            rclone serve webdav / \
-              --addr 127.0.0.1:$WEBDAV_PORT \
+            rclone serve webdav /tmp/storage \
+              --addr 0.0.0.0:$WEBDAV_PORT \
               --allow-origin '*' \
               --no-checksum \
               --vfs-links \
@@ -192,70 +204,36 @@ jobs:
             return 1
           }
 
-          restart_router() {
-            echo "🔄 Restarting Router on :$ROUTER_PORT..."
-            fuser -k $ROUTER_PORT/tcp 2>/dev/null || true
-            sleep 1
-            node scripts/router.js > /tmp/router.log 2>&1 &
-            for i in $(seq 1 10); do
-              curl -sf http://localhost:$ROUTER_PORT/health > /dev/null 2>&1 && echo "✅ Router restarted!" && return 0
-              sleep 2
-            done
-            echo "❌ Router restart failed!"
-            return 1
-          }
+          # ─── Start all 3 bore tunnels ────────────────────────────
+          MCP_TUNNEL=$(start_bore $MCP_PORT) || exit 1
+          TERMINAL_TUNNEL=$(start_bore $TERMINAL_PORT) || exit 1
+          WEBDAV_TUNNEL=$(start_bore $WEBDAV_PORT) || exit 1
 
-          register_worker() {
-            echo "📡 Registering tunnel with Worker: $1"
-            RESP=$(curl -sf -X POST "$WORKER_URL/register" \
-              -H "Content-Type: application/json" \
-              -H "X-Auth-Token: $AUTH_TOKEN" \
-              -d "{\"tunnelUrl\": \"$1\"}" 2>&1) || true
-            echo "   Worker response: $RESP"
-          }
+          echo ""
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║  🎭 Playwright: $MCP_TUNNEL"
+          echo "║     → $PLAYWRIGHT_WORKER/sse"
+          echo "║  🖥️ Terminal:   $TERMINAL_TUNNEL"
+          echo "║     → $TERMINAL_WORKER/sse"
+          echo "║  📂 WebDAV:    $WEBDAV_TUNNEL"
+          echo "║     → $WEBDAV_WORKER/"
+          echo "╚══════════════════════════════════════════════════╝"
+          echo ""
 
-          print_banner() {
-            echo ""
-            echo "╔══════════════════════════════════════════════════╗"
-            echo "║  🌐 TUNNEL:    $1"
-            echo "╠══════════════════════════════════════════════════╣"
-            echo "║  🎭 MCP:      $WORKER_URL/playwright/sse"
-            echo "║  🖥️ Terminal: $WORKER_URL/terminal/sse"
-            echo "║  📂 WebDAV:   $WORKER_URL/storage-dav/"
-            echo "╚══════════════════════════════════════════════════╝"
-            echo ""
-          }
+          # ─── Register all 3 workers ─────────────────────────────
+          register_worker "$PLAYWRIGHT_WORKER" "$MCP_TUNNEL"
+          register_worker "$TERMINAL_WORKER" "$TERMINAL_TUNNEL"
+          register_worker "$WEBDAV_WORKER" "$WEBDAV_TUNNEL"
+          echo "✅ All runners registered!"
 
-          # ─── Start bore.pub ──────────────────────────────────────
-          start_bore() {
-            echo "🌐 Starting bore.pub tunnel on router (:$ROUTER_PORT)..."
-            rm -f /tmp/bore.log
-            bore local $ROUTER_PORT --to bore.pub > /tmp/bore.log 2>&1 &
-            BORE_PID=$!
-            sleep 5
-
-            BORE_URL=$(grep -oE 'bore\.pub:[0-9]+' /tmp/bore.log | head -1)
-            if [ -z "$BORE_URL" ]; then
-              echo "❌ bore.pub URL nahi mili!"
-              cat /tmp/bore.log
-              return 1
-            fi
-
-            TUNNEL_URL="http://$BORE_URL"
-            print_banner "$TUNNEL_URL"
-            register_worker "$TUNNEL_URL"
-            echo "✅ Runner registered!"
-          }
-
-          # ─── Initial bore start ───────────────────────────────────
-          start_bore || exit 1
-
-          # ─── Watchdog Loop (every 5 sec) ─────────────────────────
+          # ─── Watchdog Loop ──────────────────────────────────────
           echo "🐶 Watchdog started — monitoring every 5 seconds..."
+          LAST_REGISTER=$(date +%s)
+
           while true; do
             sleep 5
 
-            # --- Check all service ports ---
+            # --- Service health checks ---
             if ! nc -z localhost $MCP_PORT 2>/dev/null; then
               echo "⚠️ $(date) — MCP :$MCP_PORT down! Restarting..."
               restart_mcp
@@ -271,44 +249,43 @@ jobs:
               restart_webdav
             fi
 
-            if ! curl -sf http://localhost:$ROUTER_PORT/health > /dev/null 2>&1; then
-              echo "⚠️ $(date) — Router :$ROUTER_PORT down! Restarting..."
-              restart_router
-            fi
+            # --- Bore tunnel health checks ---
+            for entry in "$MCP_PORT:$MCP_TUNNEL:$PLAYWRIGHT_WORKER" "$TERMINAL_PORT:$TERMINAL_TUNNEL:$TERMINAL_WORKER" "$WEBDAV_PORT:$WEBDAV_TUNNEL:$WEBDAV_WORKER"; do
+              IFS=: read -r port tunnel worker <<< "$entry"
+              bore_log="/tmp/bore-${port}.log"
+              bore_url=$(grep -oE 'bore\.pub:[0-9]+' "$bore_log" 2>/dev/null | head -1)
 
-            # --- Check bore.pub tunnel via external health ---
-            if ! kill -0 $BORE_PID 2>/dev/null; then
-              echo "🔴 $(date) — bore.pub process died! Reconnecting..."
-              start_bore || {
-                echo "❌ bore reconnection failed! Retrying in 10s..."
-                sleep 10
-                continue
-              }
-              continue
-            fi
-
-            BORE_URL=$(grep -oE 'bore\.pub:[0-9]+' /tmp/bore.log | head -1)
-            if [ -n "$BORE_URL" ]; then
-              TUNNEL_CHECK="http://$BORE_URL"
-              if ! curl -sf --max-time 8 "$TUNNEL_CHECK/health" > /dev/null 2>&1; then
-                echo "🔴 $(date) — Tunnel health check failed! Reconnecting bore..."
-                kill $BORE_PID 2>/dev/null || true
-                sleep 2
-                start_bore || {
-                  echo "❌ bore reconnection failed! Retrying in 10s..."
-                  sleep 10
-                  continue
-                }
+              if [ -z "$bore_url" ]; then
+                echo "🔴 $(date) — Bore for :$port died! Reconnecting..."
+                new_tunnel=$(start_bore $port) || continue
+                case $port in
+                  $MCP_PORT) MCP_TUNNEL="$new_tunnel" ;;
+                  $TERMINAL_PORT) TERMINAL_TUNNEL="$new_tunnel" ;;
+                  $WEBDAV_PORT) WEBDAV_TUNNEL="$new_tunnel" ;;
+                esac
+                register_worker "$worker" "$new_tunnel"
                 continue
               fi
-            fi
+
+              if ! curl -sf --max-time 8 "http://$bore_url/health" > /dev/null 2>&1; then
+                echo "🔴 $(date) — Tunnel :$port health failed! Reconnecting..."
+                new_tunnel=$(start_bore $port) || continue
+                case $port in
+                  $MCP_PORT) MCP_TUNNEL="$new_tunnel" ;;
+                  $TERMINAL_PORT) TERMINAL_TUNNEL="$new_tunnel" ;;
+                  $WEBDAV_PORT) WEBDAV_TUNNEL="$new_tunnel" ;;
+                esac
+                register_worker "$worker" "$new_tunnel"
+              fi
+            done
 
             # --- Periodic re-register every 30 min ---
             NOW=$(date +%s)
-            LAST_REGISTER=${LAST_REGISTER:-$NOW}
             if [ $((NOW - LAST_REGISTER)) -ge 1800 ]; then
               echo "🔄 $(date) — Periodic re-register..."
-              register_worker "$TUNNEL_URL"
+              register_worker "$PLAYWRIGHT_WORKER" "$MCP_TUNNEL"
+              register_worker "$TERMINAL_WORKER" "$TERMINAL_TUNNEL"
+              register_worker "$WEBDAV_WORKER" "$WEBDAV_TUNNEL"
               LAST_REGISTER=$NOW
             fi
           done
