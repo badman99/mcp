@@ -1,21 +1,18 @@
 # Playwright MCP Server - GitHub Actions
 
-🎭 **Full browser automation server** running on GitHub Actions with **static URL** via zrok tunnel.
+🎭 **Full browser automation server** running on GitHub Actions with **tunnel** via bore.pub.
 
 ## 🚀 Quick Start
 
 ### 1. Set Secrets
 Go to **Settings → Secrets and variables → Actions** and add:
-- `ZROK_TOKEN` - Your zrok token (get from [zrok.io](https://zrok.io))
+- `AUTH_TOKEN` - Shared auth token for Worker ↔ Runner
 
 ### 2. Trigger Workflow
-Go to **Actions → Playwright MCP Server with zrok Tunnel → Run workflow**
+Go to **Actions → Playwright MCP Server → Run workflow**
 
 ### 3. Get Your URL
-The workflow will output your **permanent static URL**:
-```
-https://playwright-mcp-gha.share.zrok.io
-```
+The workflow will output your **tunnel URL** via bore.pub.
 
 ## 📝 OpenCode Config
 
@@ -26,13 +23,13 @@ Add this to your `opencode.jsonc`:
   "mcp": {
     "playwright": {
       "type": "http",
-      "url": "https://playwright-mcp-gha.share.zrok.io"
+      "url": "WORKER_URL/playwright/sse"
     }
   }
 }
 ```
 
-**URL never changes!** 🔥
+**URL updates per tunnel restart!** 🔥
 
 ## ⏰ Auto-Restart
 The workflow auto-triggers every 5 hours to keep the server alive!
@@ -60,8 +57,8 @@ The workflow auto-triggers every 5 hours to keep the server alive!
 ```
 GitHub Actions Runner (Ubuntu, 6h max)
 ├── Playwright MCP Server (port 3002)
-└── zrok Tunnel (static URL)
-    └── https://playwright-mcp-gha.share.zrok.io
+└── bore.pub Tunnel
+    └── http://bore.pub:XXXXX
 ```
 
 **Note:** GitHub Actions has a 6-hour limit. The workflow auto-restarts every 5 hours to maintain continuous uptime!
