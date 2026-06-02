@@ -116,24 +116,14 @@ jobs:
             exit 1
           fi
 
-      - name: Create WebDAV root
-        run: |
-          mkdir -p /tmp/root
-          ln -sf /tmp/storage /tmp/root/storage
-          echo "✅ WebDAV root ready!"
-
       - name: Start WebDAV Server
         run: |
-          echo "📂 Starting rclone WebDAV server on :$WEBDAV_PORT..."
-          ln -sf /tmp/mcp.log /tmp/root/mcp.log
-          ln -sf /tmp/storage.log /tmp/root/storage.log
-          ln -sf /tmp/router.log /tmp/root/router.log
-          ln -sf /tmp/webdav.log /tmp/root/webdav.log
-          ln -sf /tmp/bore.log /tmp/root/bore.log
-          rclone serve webdav /tmp/root \
+          echo "📂 Starting rclone WebDAV server on :$WEBDAV_PORT (serving /)..."
+          rclone serve webdav / \
             --addr 127.0.0.1:$WEBDAV_PORT \
             --allow-origin '*' \
             --no-checksum \
+            --follow-symlinks \
             --vfs-cache-mode full \
             --dir-cache-time 10s \
             > /tmp/webdav.log 2>&1 &
