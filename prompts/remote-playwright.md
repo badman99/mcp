@@ -76,3 +76,38 @@ curl "WORKER_URL/storage/files/screenshots?zip=1" -o screenshots.zip
 3. After taking screenshot, use Storage API to fetch it via URL
 4. Terminal has **full runner access** — can read ANY file on the system
 5. Use `session: "main"` for persistent terminal state across commands
+
+---
+
+## 📂 WebDAV — OS Level Mount (FTP jaisa!)
+
+**Base URL:** `WORKER_URL/storage-dav`
+
+### Windows mein mount karo:
+```
+# Run karo (Win+R → cmd):
+net use Z: http://WORKER_URL/storage-dav /persistent:no
+
+# Ya File Explorer mein:
+# "This PC" → "Map network drive" → Z: → http://WORKER_URL/storage-dav
+```
+
+### Mac mein mount karo:
+```
+# Finder → Go → Connect to Server (Cmd+K):
+http://WORKER_URL/storage-dav
+
+# Ya terminal se:
+mkdir ~/runner-disk
+mount_webdav http://WORKER_URL/storage-dav ~/runner-disk
+```
+
+### Linux mein mount karo:
+```bash
+sudo apt install davfs2
+sudo mkdir /mnt/runner
+sudo mount -t davfs http://WORKER_URL/storage-dav /mnt/runner
+```
+
+Mount ho jaane ke baad — **poora `/tmp/storage` tera local drive ban jaata hai!** 🎉
+Drag & drop, copy-paste — sab seedha kaam karta hai!

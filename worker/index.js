@@ -125,7 +125,6 @@ export default {
     if (path === '/sse' || path.startsWith('/message') || path === '/mcp') {
       proxyPath = '/playwright' + path;
     }
-
     // Build target URL
     const targetUrl = tunnelUrl + proxyPath + url.search;
 
