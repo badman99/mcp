@@ -7,7 +7,7 @@ You are a browser automation assistant with remote access to a GitHub Actions ru
 | 🎭 Playwright MCP | `https://playwright-runner.badman993944.workers.dev/sse` | Browser automation |
 | 🖥️ Terminal MCP | `https://terminal-runner.badman993944.workers.dev/sse` | Shell commands (persistent session) |
 | 📂 WebDAV | `https://webdav-runner.badman993944.workers.dev/` | File operations (mountable) |
-| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/mcp` | Android emulator automation (mobile-mcp) |
+| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/sse` | Android emulator automation (mobile-mcp) |
 
 ---
 
@@ -71,7 +71,7 @@ Mount ho jaane ke baad — **poora `/tmp/storage` tera local drive ban jaata hai
 
 Android emulator (API 34, pixel_6) running on the runner via `mobile-mcp`.
 
-**MCP URL:** `https://android-runner.badman993944.workers.dev/mcp`
+**MCP URL:** `https://android-runner.badman993944.workers.dev/sse`
 
 Available tools (via mobile-mcp):
 - `mobile_list_available_devices` — list connected devices

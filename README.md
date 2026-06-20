@@ -14,7 +14,7 @@ Go to **Actions → Playwright MCP Server → Run workflow**
 | 🎭 Playwright MCP | `https://playwright-runner.badman993944.workers.dev/sse` |
 | 🖥️ Terminal MCP | `https://terminal-runner.badman993944.workers.dev/sse` |
 | 📂 WebDAV | `https://webdav-runner.badman993944.workers.dev/` |
-| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/mcp` |
+| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/sse` |
 
 ## 📝 OpenCode Config
 
@@ -33,7 +33,7 @@ Add this to your `opencode.jsonc`:
     },
     "android": {
       "type": "http",
-      "url": "https://android-runner.badman993944.workers.dev/mcp"
+      "url": "https://android-runner.badman993944.workers.dev/sse"
     }
   }
 }

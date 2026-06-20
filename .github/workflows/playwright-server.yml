@@ -234,9 +234,11 @@ jobs:
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
 
-          echo "📲 Starting mobile-mcp on :$ANDROID_PORT..."
-          npx @mobilenext/mobile-mcp@latest \
-            --listen 0.0.0.0:$ANDROID_PORT \
+          echo "📲 Starting mobile-mcp via mcp-proxy on :$ANDROID_PORT..."
+          mcp-proxy \
+            --port $ANDROID_PORT \
+            --host 0.0.0.0 \
+            -- npx @mobilenext/mobile-mcp@latest \
             > /tmp/android-mcp.log 2>&1 &
 
           for i in $(seq 1 30); do
@@ -340,12 +342,15 @@ jobs:
           restart_android() {
             echo "🔄 Restarting Android MCP on :$ANDROID_PORT..."
             fuser -k $ANDROID_PORT/tcp 2>/dev/null || true
-            sleep 1
+            pkill -f "mobile-mcp" 2>/dev/null || true
+            sleep 2
             export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
             export ANDROID_HOME=$ANDROID_SDK_ROOT
             export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools
-            npx @mobilenext/mobile-mcp@latest \
-              --listen 0.0.0.0:$ANDROID_PORT \
+            mcp-proxy \
+              --port $ANDROID_PORT \
+              --host 0.0.0.0 \
+              -- npx @mobilenext/mobile-mcp@latest \
               > /tmp/android-mcp.log 2>&1 &
             for i in $(seq 1 15); do
               nc -z localhost $ANDROID_PORT 2>/dev/null && echo "✅ Android MCP restarted!" && return 0
