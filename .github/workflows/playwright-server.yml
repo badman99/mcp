@@ -15,11 +15,13 @@ env:
   MCP_PORT: 3002
   TERMINAL_PORT: 3004
   WEBDAV_PORT: 3005
+  ANDROID_PORT: 3006
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
   PLAYWRIGHT_WORKER: https://playwright-runner.badman993944.workers.dev
   TERMINAL_WORKER: https://terminal-runner.badman993944.workers.dev
   WEBDAV_WORKER: https://webdav-runner.badman993944.workers.dev
+  ANDROID_WORKER: https://android-runner.badman993944.workers.dev
   AUTH_TOKEN: mcp-runner-2026
 
 jobs:
@@ -32,7 +34,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install dependencies
         run: |
@@ -71,6 +73,19 @@ jobs:
           curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
           tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
           echo "✅ All dependencies ready!"
+
+          echo "📱 Installing mobile-mcp for Android automation..."
+          npm install -g @mobilenext/mobile-mcp@latest
+
+          echo "🤖 Setting up Android SDK + emulator..."
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+          sudo chown -R $USER /dev/kvm 2>/dev/null || true
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1
+          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
+          echo "✅ Android SDK + emulator ready!"
 
       - name: Configure stealth + storage
         run: |
@@ -137,6 +152,54 @@ jobs:
           nc -z localhost $WEBDAV_PORT \
             && echo "✅ WebDAV ready!" \
             || (echo "⚠️ WebDAV issue:" && cat /tmp/webdav.log)
+
+      - name: Start Android Emulator + Mobile MCP
+        run: |
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+
+          echo "🤖 Booting Android emulator..."
+          emulator -avd mcp_android \
+            -no-window -no-audio -no-snapshot \
+            -gpu swiftshader_indirect -no-boot-anim \
+            -wipe-data \
+            > /tmp/emulator.log 2>&1 &
+          EMU_PID=$!
+
+          echo "⏳ Waiting for emulator to boot..."
+          adb wait-for-device
+          BOOT_OK=0
+          for i in $(seq 1 120); do
+            BOOTED=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$BOOTED" = "1" ]; then
+              echo "✅ Emulator booted after ${i}s!"
+              BOOT_OK=1
+              break
+            fi
+            sleep 2
+          done
+          if [ $BOOT_OK -eq 0 ]; then
+            echo "❌ Emulator failed to boot in 240s!"
+            tail -50 /tmp/emulator.log
+            exit 1
+          fi
+
+          echo "📱 Disabling emulator animations for speed..."
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+
+          echo "📲 Starting mobile-mcp on :$ANDROID_PORT..."
+          npx @mobilenext/mobile-mcp@latest \
+            --listen 0.0.0.0:$ANDROID_PORT \
+            > /tmp/android-mcp.log 2>&1 &
+
+          for i in $(seq 1 30); do
+            nc -z localhost $ANDROID_PORT 2>/dev/null && echo "✅ Android MCP ready!" && break
+            [ $i -eq 30 ] && echo "❌ Android MCP failed!" && cat /tmp/android-mcp.log && exit 1
+            sleep 2
+          done
 
       - name: Start Tunnels + Watchdog
         run: |
@@ -230,7 +293,25 @@ jobs:
             return 1
           }
 
-          # ─── Start all 3 bore tunnels ────────────────────────────
+          restart_android() {
+            echo "🔄 Restarting Android MCP on :$ANDROID_PORT..."
+            fuser -k $ANDROID_PORT/tcp 2>/dev/null || true
+            sleep 1
+            export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+            export ANDROID_HOME=$ANDROID_SDK_ROOT
+            export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools
+            npx @mobilenext/mobile-mcp@latest \
+              --listen 0.0.0.0:$ANDROID_PORT \
+              > /tmp/android-mcp.log 2>&1 &
+            for i in $(seq 1 15); do
+              nc -z localhost $ANDROID_PORT 2>/dev/null && echo "✅ Android MCP restarted!" && return 0
+              sleep 2
+            done
+            echo "❌ Android MCP restart failed!"
+            return 1
+          }
+
+          # ─── Start all 4 bore tunnels ────────────────────────────
           MCP_BORE=$(start_bore $MCP_PORT) || exit 1
           MCP_BORE_PID=${MCP_BORE%%:*}
           MCP_TUNNEL=${MCP_BORE#*:}
@@ -243,6 +324,10 @@ jobs:
           WEBDAV_BORE_PID=${WEBDAV_BORE%%:*}
           WEBDAV_TUNNEL=${WEBDAV_BORE#*:}
 
+          ANDROID_BORE=$(start_bore $ANDROID_PORT) || exit 1
+          ANDROID_BORE_PID=${ANDROID_BORE%%:*}
+          ANDROID_TUNNEL=${ANDROID_BORE#*:}
+
           echo ""
           echo "╔══════════════════════════════════════════════════╗"
           echo "║  🎭 Playwright: $MCP_TUNNEL"
@@ -251,6 +336,8 @@ jobs:
           echo "║     → $TERMINAL_WORKER/sse"
           echo "║  📂 WebDAV:    $WEBDAV_TUNNEL"
           echo "║     → $WEBDAV_WORKER/"
+          echo "║  📱 Android:   $ANDROID_TUNNEL"
+          echo "║     → $ANDROID_WORKER/mcp"
           echo "╚══════════════════════════════════════════════════╝"
           echo ""
 
@@ -258,6 +345,7 @@ jobs:
           redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
           redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
           redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
+          redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
           echo "✅ All URLs saved to Redis!"
 
           # ─── Watchdog Loop ──────────────────────────────────────
@@ -300,6 +388,17 @@ jobs:
               echo "📡 WebDAV bore reconnected → $WEBDAV_TUNNEL"
             fi
 
+            if ! nc -z localhost $ANDROID_PORT 2>/dev/null; then
+              echo "⚠️ $(date) — Android MCP :$ANDROID_PORT down! Restarting..."
+              kill $ANDROID_BORE_PID 2>/dev/null || true
+              restart_android
+              NEW_BORE=$(start_bore $ANDROID_PORT) || continue
+              ANDROID_BORE_PID=${NEW_BORE%%:*}
+              ANDROID_TUNNEL=${NEW_BORE#*:}
+              redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
+              echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
+            fi
+
             # --- Bore PID checks: if bore died → reconnect + update Redis ---
             if ! kill -0 $MCP_BORE_PID 2>/dev/null; then
               echo "🔴 $(date) — Bore for :$MCP_PORT died! Reconnecting..."
@@ -326,5 +425,14 @@ jobs:
               WEBDAV_TUNNEL=${NEW_BORE#*:}
               redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
               echo "📡 WebDAV bore reconnected → $WEBDAV_TUNNEL"
+            fi
+
+            if ! kill -0 $ANDROID_BORE_PID 2>/dev/null; then
+              echo "🔴 $(date) — Bore for :$ANDROID_PORT died! Reconnecting..."
+              NEW_BORE=$(start_bore $ANDROID_PORT) || continue
+              ANDROID_BORE_PID=${NEW_BORE%%:*}
+              ANDROID_TUNNEL=${NEW_BORE#*:}
+              redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
+              echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
             fi
           done

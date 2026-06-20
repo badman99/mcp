@@ -14,6 +14,7 @@ Go to **Actions → Playwright MCP Server → Run workflow**
 | 🎭 Playwright MCP | `https://playwright-runner.badman993944.workers.dev/sse` |
 | 🖥️ Terminal MCP | `https://terminal-runner.badman993944.workers.dev/sse` |
 | 📂 WebDAV | `https://webdav-runner.badman993944.workers.dev/` |
+| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/mcp` |
 
 ## 📝 OpenCode Config
 
@@ -29,6 +30,10 @@ Add this to your `opencode.jsonc`:
     "terminal": {
       "type": "http",
       "url": "https://terminal-runner.badman993944.workers.dev/sse"
+    },
+    "android": {
+      "type": "http",
+      "url": "https://android-runner.badman993944.workers.dev/mcp"
     }
   }
 }
@@ -42,6 +47,7 @@ The workflow auto-triggers every 4 hours to keep the server alive!
 - ✅ Headless Chromium browser (stealth mode)
 - ✅ Terminal MCP (persistent shell access)
 - ✅ WebDAV file server (mountable as network drive)
+- ✅ Android MCP (mobile-mcp on Android 14 emulator)
 - ✅ Each service has its own bore tunnel + Cloudflare Worker
 - ✅ Auto-restart crashed services (watchdog every 5s)
 - ✅ Auto-reconnect bore tunnels on disconnect
@@ -52,7 +58,8 @@ The workflow auto-triggers every 4 hours to keep the server alive!
 GitHub Actions Runner (Ubuntu)
 ├── Playwright MCP :3002 → bore.pub → playwright-runner.worker.dev
 ├── Terminal MCP   :3004 → bore.pub → terminal-runner.worker.dev
-└── WebDAV         :3005 → bore.pub → webdav-runner.worker.dev
+├── WebDAV         :3005 → bore.pub → webdav-runner.worker.dev
+└── Android MCP    :3006 → bore.pub → android-runner.worker.dev
 ```
 
 Each service is independent — one crashing doesn't affect others!
