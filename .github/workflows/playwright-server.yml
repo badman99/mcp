@@ -80,22 +80,29 @@ jobs:
           echo "🤖 Setting up Android SDK + emulator..."
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export ANDROID_AVD_HOME=$HOME/.android/avd
           export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
 
           echo "🔧 Enabling KVM hardware acceleration..."
-          sudo apt-get update -qq && sudo apt-get install -y -qq cpu-checker libvirt-clients 2>/dev/null || true
           sudo chown -R $USER /dev/kvm 2>/dev/null || true
           if [ -e /dev/kvm ]; then
             echo "✅ /dev/kvm exists"
-            kvm-ok 2>/dev/null || echo "⚠️ KVM not accelerated, using software rendering"
           else
-            echo "⚠️ /dev/kvm not found — emulator will be slow (software mode)"
+            echo "⚠️ /dev/kvm not found — using software rendering"
           fi
 
-          echo "📦 Installing Android system image..."
+          echo "📦 Installing Android system image (this may take a minute)..."
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" 2>&1 | tail -5
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
+          echo "✅ System image installed"
+
+          echo "🏗️ Creating AVD..."
+          mkdir -p $ANDROID_AVD_HOME
           echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
+
+          echo "📋 Verifying AVD created..."
+          avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
+          ls -la $ANDROID_AVD_HOME/ 2>/dev/null || true
           echo "✅ Android SDK + emulator ready!"
 
       - name: Configure stealth + storage
@@ -168,7 +175,11 @@ jobs:
         run: |
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export ANDROID_AVD_HOME=$HOME/.android/avd
           export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+
+          echo "📋 Available AVDs:"
+          emulator -list-avds
 
           echo "🤖 Booting Android emulator (KVM accelerated)..."
           emulator -avd mcp_android \
