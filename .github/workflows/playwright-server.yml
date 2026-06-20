@@ -81,9 +81,20 @@ jobs:
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+
+          echo "🔧 Enabling KVM hardware acceleration..."
+          sudo apt-get update -qq && sudo apt-get install -y -qq cpu-checker libvirt-clients 2>/dev/null || true
           sudo chown -R $USER /dev/kvm 2>/dev/null || true
+          if [ -e /dev/kvm ]; then
+            echo "✅ /dev/kvm exists"
+            kvm-ok 2>/dev/null || echo "⚠️ KVM not accelerated, using software rendering"
+          else
+            echo "⚠️ /dev/kvm not found — emulator will be slow (software mode)"
+          fi
+
+          echo "📦 Installing Android system image..."
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" > /dev/null 2>&1
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64" 2>&1 | tail -5
           echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
           echo "✅ Android SDK + emulator ready!"
 
@@ -159,29 +170,51 @@ jobs:
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
 
-          echo "🤖 Booting Android emulator..."
+          echo "🤖 Booting Android emulator (KVM accelerated)..."
           emulator -avd mcp_android \
             -no-window -no-audio -no-snapshot \
+            -no-snapshot-save -no-snapshot-load \
             -gpu swiftshader_indirect -no-boot-anim \
-            -wipe-data \
+            -wipe-data -accel auto \
+            -netdelay none -netspeed full \
             > /tmp/emulator.log 2>&1 &
           EMU_PID=$!
+          echo "Emulator PID: $EMU_PID"
 
-          echo "⏳ Waiting for emulator to boot..."
-          adb wait-for-device
+          echo "⏳ Waiting for device to come online (max 180s)..."
           BOOT_OK=0
-          for i in $(seq 1 120); do
-            BOOTED=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
-            if [ "$BOOTED" = "1" ]; then
-              echo "✅ Emulator booted after ${i}s!"
+          for i in $(seq 1 90); do
+            # Check if emulator process is still alive
+            if ! kill -0 $EMU_PID 2>/dev/null; then
+              echo "❌ Emulator process died! Last logs:"
+              tail -80 /tmp/emulator.log
+              exit 1
+            fi
+
+            # Try to connect via adb
+            ADB_OUT=$(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
+            if [ "$ADB_OUT" = "1" ]; then
+              echo "✅ Emulator booted after $((i*2))s!"
               BOOT_OK=1
               break
             fi
+
+            # Progress logging every 10 iterations
+            if [ $((i % 10)) -eq 0 ]; then
+              echo "   ...still booting (${i}*2)s, adb says: '$ADB_OUT'"
+              tail -3 /tmp/emulator.log 2>/dev/null || true
+            fi
             sleep 2
           done
+
           if [ $BOOT_OK -eq 0 ]; then
-            echo "❌ Emulator failed to boot in 240s!"
-            tail -50 /tmp/emulator.log
+            echo "❌ Emulator failed to boot in 180s!"
+            echo "=== Emulator log (last 100 lines) ==="
+            tail -100 /tmp/emulator.log
+            echo "=== ADB devices ==="
+            adb devices -l 2>/dev/null || true
+            echo "=== Process check ==="
+            kill -0 $EMU_PID 2>/dev/null && echo "Emulator process alive" || echo "Emulator process dead"
             exit 1
           fi
 
