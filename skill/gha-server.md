@@ -325,6 +325,31 @@ execute_command(command: "curl -s 'https://SERVICE-runner.YOUR_SUBDOMAIN.workers
 
 Or tell the user: *"The remote runner is down. I've triggered a restart. Please wait 2-3 minutes for it to boot, then reconnect the MCP server."*
 
+> ⚠️ **CRITICAL — `/activate` kills the OLD runner too!**
+>
+> The workflow uses `concurrency: cancel-in-progress: true`. This means:
+> - If an **old runner is still alive**, calling `/activate` will **cancel and kill it**
+> - A **brand new runner** starts from scratch — all 4 services reboot
+> - **All old MCP sessions become invalid** — even ones that were working fine
+> - **All bore tunnels are destroyed** and new ones are created
+> - **All files in `/tmp` are lost** (fresh Ubuntu instance)
+>
+> So `/activate` is a **full nuclear restart** — not a gentle reconnect.
+>
+> **When to use `/activate`:**
+> - ✅ Runner is completely down (`active: false`)
+> - ✅ Runner is stuck/unresponsive (tools timing out)
+> - ✅ Bore tunnel is dead and watchdog failed to recover
+> - ❌ DON'T use if only ONE service is down but others are working fine — you'll kill the working ones too
+> - ❌ DON'T use if sessions are just stale but runner is healthy — just ask user to reconnect MCP instead
+>
+> **After `/activate`:**
+> 1. Old runner is killed within seconds
+> 2. New runner boots (~2-3 min)
+> 3. All 4 services start fresh with new sessions
+> 4. User MUST reconnect ALL MCP servers (not just the one that was down)
+> 5. Any files saved in `/tmp` on the old runner are GONE
+
 The workflow takes ~2-3 minutes to:
 1. Boot the Ubuntu runner
 2. Install dependencies
