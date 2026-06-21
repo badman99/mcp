@@ -277,6 +277,117 @@ After mounting, the runner's filesystem works like a local drive — drag & drop
 
 ---
 
+## 🔄 Runner Down? Here's What To Do
+
+The GitHub Actions runner has a **6-hour max uptime**. After that (or if it crashes), MCP tools will fail. Here's the exact recovery procedure:
+
+### Signs the Runner is Down
+
+| Symptom | Meaning |
+|---|---|
+| MCP tool call → `502 Bad Gateway` or `Runner unreachable` | Runner is offline / bore tunnel dead |
+| MCP tool call → `503` with offline HTML page | No runner registered — needs to be started |
+| MCP tool call → `Invalid session` or `Session not found` | Old dead session ID — runner restarted, new session needed |
+| MCP tool call → timeout / no response | Bore tunnel disconnected or service crashed |
+| `browser_navigate` → connection refused | Playwright MCP process dead |
+
+### Recovery Steps
+
+**Step 1: Identify which service is down**
+
+Check which MCP tool is failing:
+- `gha-browser` tools failing → `playwright-runner.YOUR_SUBDOMAIN.workers.dev`
+- `gha-shell` tools failing → `terminal-runner.YOUR_SUBDOMAIN.workers.dev`
+- `gha-android` tools failing → `android-runner.YOUR_SUBDOMAIN.workers.dev`
+- WebDAV failing → `webdav-runner.YOUR_SUBDOMAIN.workers.dev`
+
+**Step 2: Check runner status**
+
+```
+curl https://SERVICE-runner.YOUR_SUBDOMAIN.workers.dev/status
+```
+
+If `active: false` → runner is down, go to Step 3.
+If `active: true` → runner is up but session is stale, go to Step 4.
+
+**Step 3: Start the runner (call /activate)**
+
+Trigger the GitHub Actions workflow via the worker's activate endpoint:
+
+```bash
+curl "https://SERVICE-runner.YOUR_SUBDOMAIN.workers.dev/activate?token=YOUR_AUTH_TOKEN"
+```
+
+Or use `gha-shell` if it's still working:
+```
+execute_command(command: "curl -s 'https://SERVICE-runner.YOUR_SUBDOMAIN.workers.dev/activate?token=YOUR_AUTH_TOKEN'", session: "main")
+```
+
+Or tell the user: *"The remote runner is down. I've triggered a restart. Please wait 2-3 minutes for it to boot, then reconnect the MCP server."*
+
+The workflow takes ~2-3 minutes to:
+1. Boot the Ubuntu runner
+2. Install dependencies
+3. Start all 4 services
+4. Create bore tunnels
+5. Register tunnel URLs to Redis
+
+**Step 4: Tell the user to reconnect MCP (CRITICAL!)**
+
+> ⚠️ **This step is MANDATORY.** Even after the runner restarts, MCP tool calls will fail with `Invalid session` if you don't reconnect.
+
+After the runner is back online, you MUST tell the user:
+
+*"The runner has restarted. Please reconnect the MCP server so I can get a fresh session ID:*
+
+*1. Go to MCP settings*
+*2. Toggle the MCP server OFF, then ON again*
+*   — OR —*
+*3. Remove the MCP server and re-add it*
+*4. Wait for it to show 'connected'*
+
+*Until you do this, my old session ID is stale and all MCP calls will fail with 'Invalid session' or 'Session not found'."*
+
+### Why Reconnect is Needed
+
+```
+Before restart:                          After restart:
+┌─────────────┐                         ┌─────────────┐
+│ AI Agent    │                         │ AI Agent    │
+│ sessionId=  │    ← stale session      │ sessionId=  │
+│   abc-123   │    ← runner doesn't     │   abc-123   │
+│             │      know this ID       │             │
+└──────┬──────┘                         └──────┬──────┘
+       ↓ MCP call                              ↓ MCP call
+┌─────────────┐                         ┌─────────────┐
+│ Worker      │                         │ Worker      │
+│ (proxy)     │                         │ (proxy)     │
+└──────┬──────┘                         └──────┬──────┘
+       ↓                                      ↓
+┌─────────────┐                         ┌─────────────┐
+│ bore tunnel │                         │ bore tunnel │
+│ abc-123     │                         │ xyz-789     │ ← NEW session!
+│ (DEAD)      │                         │ (FRESH)     │
+└─────────────┘                         └─────────────┘
+```
+
+When the runner restarts:
+- Bore tunnel gets a **new port** → Worker proxies to new URL
+- MCP server (SSE) creates **new session IDs** → old `abc-123` is gone
+- AI agent still holds **old session ID** → every call = `Session not found`
+- Reconnecting MCP = AI agent opens **new SSE stream** → gets **fresh session ID** → calls work again
+
+### Quick Recovery Checklist
+
+1. ✅ Detect failure (tool error / timeout / invalid session)
+2. ✅ Check `/status` endpoint
+3. ✅ Call `/activate?token=YOUR_AUTH_TOKEN` if down
+4. ✅ Wait 2-3 min for runner to boot
+5. ✅ Tell user to **reconnect MCP** (toggle off/on or remove+add)
+6. ✅ Test with a simple tool call after reconnect
+
+---
+
 ## Architecture
 
 ```
