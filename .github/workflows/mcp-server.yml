@@ -148,10 +148,20 @@ jobs:
           redis_set() {
             local key="$1"
             local value="$2"
-            curl -s -X POST "${REDIS_URL}" \
-              -H "Authorization: Bearer ${REDIS_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1 || true
+            for attempt in 1 2 3; do
+              local resp
+              resp=$(curl -s -X POST "${REDIS_URL}" \
+                -H "Authorization: Bearer ${REDIS_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "[\"SET\",\"${key}\",\"${value}\"]" 2>&1)
+              if echo "$resp" | grep -q '"OK"'; then
+                return 0
+              fi
+              echo "⚠️ Redis SET $key failed (attempt $attempt): $resp"
+              sleep 1
+            done
+            echo "❌ Redis SET $key failed after 3 attempts!"
+            return 1
           }
 
           start_bore() {
@@ -194,10 +204,15 @@ jobs:
           echo ""
 
           # ─── Save 3 tunnels to Redis ─────────────────────────────
-          redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
-          redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
-          redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
-          echo "✅ 3 tunnel URLs saved to Redis! Playwright/Terminal/WebDAV are LIVE!"
+          REDIS_OK=0
+          redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL" && REDIS_OK=$((REDIS_OK+1))
+          redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL" && REDIS_OK=$((REDIS_OK+1))
+          redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL" && REDIS_OK=$((REDIS_OK+1))
+          if [ $REDIS_OK -eq 3 ]; then
+            echo "✅ 3 tunnel URLs saved to Redis! Playwright/Terminal/WebDAV are LIVE!"
+          else
+            echo "⚠️ Only $REDIS_OK/3 tunnels saved to Redis — some may need watchdog to update"
+          fi
 
       - name: Boot Android Emulator + Mobile MCP
         run: |
@@ -303,10 +318,20 @@ jobs:
           redis_set() {
             local key="$1"
             local value="$2"
-            curl -s -X POST "${REDIS_URL}" \
-              -H "Authorization: Bearer ${REDIS_TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1 || true
+            for attempt in 1 2 3; do
+              local resp
+              resp=$(curl -s -X POST "${REDIS_URL}" \
+                -H "Authorization: Bearer ${REDIS_TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d "[\"SET\",\"${key}\",\"${value}\"]" 2>&1)
+              if echo "$resp" | grep -q '"OK"'; then
+                return 0
+              fi
+              echo "⚠️ Redis SET $key failed (attempt $attempt): $resp"
+              sleep 1
+            done
+            echo "❌ Redis SET $key failed after 3 attempts!"
+            return 1
           }
 
           start_bore() {
@@ -429,8 +454,11 @@ jobs:
           echo ""
 
           # ─── Save Android tunnel to Redis ─────────────────────────
-          redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
-          echo "✅ All 4 tunnel URLs saved to Redis!"
+          if redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"; then
+            echo "✅ All 4 tunnel URLs saved to Redis!"
+          else
+            echo "⚠️ Android tunnel URL save failed — watchdog will retry"
+          fi
 
           # ─── Watchdog Loop (all 4 services) ───────────────────────
           echo "🐶 Watchdog started — monitoring all 4 services every 5 seconds..."
