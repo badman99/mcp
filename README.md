@@ -111,7 +111,7 @@ See [`Cf_Workers/README.md`](Cf_Workers/README.md) for full worker code and depl
 ```
 mcp/
 ├── .github/workflows/
-│   └── playwright-server.yml    # Main workflow — installs deps, starts 4 services, watchdog
+│   └── mcp-server.yml            # Main workflow — installs deps, starts 4 services, watchdog
 ├── Cf_Workers/                   # Cloudflare Worker source code
 │   ├── playwright-runner/        # Browser MCP proxy (KV + Redis)
 │   ├── terminal-runner/          # Terminal MCP proxy (KV + Redis)
@@ -222,7 +222,7 @@ Each worker will get a URL like `https://playwright-runner.YOUR_SUBDOMAIN.worker
 In each `Cf_Workers/*/index.js`, replace:
 - `AUTH_TOKEN` — your secret token
 - `GITHUB_REPO` — your forked repo (`yourusername/mcp`)
-- `WORKFLOW_FILE` — keep as `playwright-server.yml`
+- `WORKFLOW_FILE` — keep as `mcp-server.yml`
 - `REDIS_URL` / `REDIS_TOKEN` — your Upstash Redis credentials
 - `GITHUB_PAT` — your GitHub PAT for workflow triggers
 

@@ -1,6 +1,6 @@
 const AUTH_TOKEN = "mcp-runner-2026";
 const GITHUB_REPO = "badman99/mcp";
-const WORKFLOW_FILE = "playwright-server.yml";
+const WORKFLOW_FILE = "mcp-server.yml";
 const REDIS_URL = "https://regular-parrot-113383.upstash.io";
 const REDIS_TOKEN = "gQAAAAAAAbrnAAIgcDIwY2Y5NWJhMzliNDI0ZjcxOTA2ZmZkMzJhOWZkYTliNQ";
 const KEY_PREFIX = "tm";

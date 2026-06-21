@@ -1,4 +1,4 @@
-name: Playwright MCP Server
+name: MCP Server
 
 on:
   workflow_dispatch:
