@@ -18,11 +18,11 @@ env:
   ANDROID_PORT: 3006
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
-  PLAYWRIGHT_WORKER: ${{ secrets.PLAYWRIGHT_WORKER }}
-  TERMINAL_WORKER: ${{ secrets.TERMINAL_WORKER }}
-  WEBDAV_WORKER: ${{ secrets.WEBDAV_WORKER }}
-  ANDROID_WORKER: ${{ secrets.ANDROID_WORKER }}
-  AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+  PLAYWRIGHT_WORKER: https://playwright-runner.badman993944.workers.dev
+  TERMINAL_WORKER: https://terminal-runner.badman993944.workers.dev
+  WEBDAV_WORKER: https://webdav-runner.badman993944.workers.dev
+  ANDROID_WORKER: https://android-runner.badman993944.workers.dev
+  AUTH_TOKEN: mcp-runner-2026
 
 jobs:
   server:
@@ -73,6 +73,37 @@ jobs:
           curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
           tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
           echo "✅ All dependencies ready!"
+
+          echo "📱 Installing mobile-mcp for Android automation..."
+          npm install -g @mobilenext/mobile-mcp@latest
+
+          echo "🤖 Setting up Android SDK + emulator..."
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export ANDROID_AVD_HOME=$HOME/.android/avd
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+
+          echo "🔧 Enabling KVM hardware acceleration..."
+          sudo chown -R $USER /dev/kvm 2>/dev/null || true
+          if [ -e /dev/kvm ]; then
+            echo "✅ /dev/kvm exists"
+          else
+            echo "⚠️ /dev/kvm not found — using software rendering"
+          fi
+
+          echo "📦 Installing Android system image (this may take a minute)..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
+          echo "✅ System image installed"
+
+          echo "🏗️ Creating AVD..."
+          mkdir -p $ANDROID_AVD_HOME
+          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
+
+          echo "📋 Verifying AVD created..."
+          avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
+          ls -la $ANDROID_AVD_HOME/ 2>/dev/null || true
+          echo "✅ Android SDK + emulator ready!"
 
       - name: Configure stealth + storage
         run: |
@@ -140,109 +171,12 @@ jobs:
             && echo "✅ WebDAV ready!" \
             || (echo "⚠️ WebDAV issue:" && cat /tmp/webdav.log)
 
-      - name: Start Tunnels (Playwright + Terminal + WebDAV)
-        run: |
-          REDIS_URL="${{ secrets.REDIS_URL }}"
-          REDIS_TOKEN="${{ secrets.REDIS_TOKEN }}"
-
-          redis_set() {
-            local key="$1"
-            local value="$2"
-            for attempt in 1 2 3; do
-              local resp
-              resp=$(curl -s -X POST "${REDIS_URL}" \
-                -H "Authorization: Bearer ${REDIS_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d "[\"SET\",\"${key}\",\"${value}\"]" 2>&1)
-              if echo "$resp" | grep -q '"OK"'; then
-                return 0
-              fi
-              echo "⚠️ Redis SET $key failed (attempt $attempt): $resp"
-              sleep 1
-            done
-            echo "❌ Redis SET $key failed after 3 attempts!"
-            return 1
-          }
-
-          start_bore() {
-            local port="$1"
-            local log="/tmp/bore-${port}.log"
-            rm -f "$log"
-            bore local $port --to bore.pub > "$log" 2>&1 &
-            local pid=$!
-            sleep 5
-            local url=$(grep -oE 'bore\.pub:[0-9]+' "$log" | head -1)
-            if [ -z "$url" ]; then
-              echo "❌ bore tunnel failed for port $port!"
-              cat "$log"
-              return 1
-            fi
-            echo "::add-mask::http://$url"
-            echo "$pid:http://$url"
-          }
-
-          # ─── Start 3 bore tunnels (Playwright + Terminal + WebDAV) ───
-          MCP_BORE=$(start_bore $MCP_PORT) || exit 1
-          MCP_BORE_PID=${MCP_BORE%%:*}
-          MCP_TUNNEL=${MCP_BORE#*:}
-
-          TERMINAL_BORE=$(start_bore $TERMINAL_PORT) || exit 1
-          TERMINAL_BORE_PID=${TERMINAL_BORE%%:*}
-          TERMINAL_TUNNEL=${TERMINAL_BORE#*:}
-
-          WEBDAV_BORE=$(start_bore $WEBDAV_PORT) || exit 1
-          WEBDAV_BORE_PID=${WEBDAV_BORE%%:*}
-          WEBDAV_TUNNEL=${WEBDAV_BORE#*:}
-
-          echo ""
-          echo "╔══════════════════════════════════════════════════╗"
-          echo "║  🎭 Playwright: tunnel active"
-          echo "║  🖥️ Terminal:   tunnel active"
-          echo "║  📂 WebDAV:     tunnel active"
-          echo "║  📱 Android:    pending (booting...)"
-          echo "╚══════════════════════════════════════════════════╝"
-          echo ""
-
-          # ─── Save 3 tunnels to Redis ─────────────────────────────
-          REDIS_OK=0
-          redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL" && REDIS_OK=$((REDIS_OK+1))
-          redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL" && REDIS_OK=$((REDIS_OK+1))
-          redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL" && REDIS_OK=$((REDIS_OK+1))
-          if [ $REDIS_OK -eq 3 ]; then
-            echo "✅ 3 tunnel URLs saved to Redis! Playwright/Terminal/WebDAV are LIVE!"
-          else
-            echo "⚠️ Only $REDIS_OK/3 tunnels saved to Redis — some may need watchdog to update"
-          fi
-
-      - name: Boot Android Emulator + Mobile MCP
+      - name: Start Android Emulator + Mobile MCP
         run: |
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_AVD_HOME=$HOME/.android/avd
-          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-
-          echo "📱 Installing mobile-mcp..."
-          npm install -g @mobilenext/mobile-mcp@latest
-
-          echo "🔧 Enabling KVM hardware acceleration..."
-          sudo chown -R $USER /dev/kvm 2>/dev/null || true
-          if [ -e /dev/kvm ]; then
-            echo "✅ /dev/kvm exists"
-          else
-            echo "⚠️ /dev/kvm not found — using software rendering"
-          fi
-
-          echo "📦 Installing Android system image..."
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
-          echo "✅ System image installed"
-
-          echo "🏗️ Creating AVD..."
-          mkdir -p $ANDROID_AVD_HOME
-          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
-
-          echo "📋 Verifying AVD created..."
-          avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
 
           echo "📋 Available AVDs:"
           emulator -list-avds
@@ -261,12 +195,14 @@ jobs:
           echo "⏳ Waiting for device to come online (max 180s)..."
           BOOT_OK=0
           for i in $(seq 1 90); do
+            # Check if emulator process is still alive
             if ! kill -0 $EMU_PID 2>/dev/null; then
               echo "❌ Emulator process died! Last logs:"
               tail -80 /tmp/emulator.log
               exit 1
             fi
 
+            # Try to connect via adb
             ADB_OUT=$(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
             if [ "$ADB_OUT" = "1" ]; then
               echo "✅ Emulator booted after $((i*2))s!"
@@ -274,6 +210,7 @@ jobs:
               break
             fi
 
+            # Progress logging every 10 iterations
             if [ $((i % 10)) -eq 0 ]; then
               echo "   ...still booting (${i}*2)s, adb says: '$ADB_OUT'"
               tail -3 /tmp/emulator.log 2>/dev/null || true
@@ -310,28 +247,18 @@ jobs:
             sleep 2
           done
 
-      - name: Start Android Tunnel + Watchdog
+      - name: Start Tunnels + Watchdog
         run: |
-          REDIS_URL="${{ secrets.REDIS_URL }}"
-          REDIS_TOKEN="${{ secrets.REDIS_TOKEN }}"
+          REDIS_URL="https://regular-parrot-113383.upstash.io"
+          REDIS_TOKEN="gQAAAAAAAbrnAAIgcDIwY2Y5NWJhMzliNDI0ZjcxOTA2ZmZkMzJhOWZkYTliNQ"
 
           redis_set() {
             local key="$1"
             local value="$2"
-            for attempt in 1 2 3; do
-              local resp
-              resp=$(curl -s -X POST "${REDIS_URL}" \
-                -H "Authorization: Bearer ${REDIS_TOKEN}" \
-                -H "Content-Type: application/json" \
-                -d "[\"SET\",\"${key}\",\"${value}\"]" 2>&1)
-              if echo "$resp" | grep -q '"OK"'; then
-                return 0
-              fi
-              echo "⚠️ Redis SET $key failed (attempt $attempt): $resp"
-              sleep 1
-            done
-            echo "❌ Redis SET $key failed after 3 attempts!"
-            return 1
+            curl -sf -X POST "${REDIS_URL}" \
+              -H "Authorization: Bearer ${REDIS_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1
           }
 
           start_bore() {
@@ -343,11 +270,10 @@ jobs:
             sleep 5
             local url=$(grep -oE 'bore\.pub:[0-9]+' "$log" | head -1)
             if [ -z "$url" ]; then
-              echo "❌ bore tunnel failed for port $port!"
+              echo "❌ bore.pub URL not found for port $port!"
               cat "$log"
               return 1
             fi
-            echo "::add-mask::http://$url"
             echo "$pid:http://$url"
           }
 
@@ -434,34 +360,45 @@ jobs:
             return 1
           }
 
-          # ─── Recover existing tunnel PIDs from previous step ───────
-          MCP_BORE_PID=$(pgrep -f "bore local $MCP_PORT" | head -1)
-          TERMINAL_BORE_PID=$(pgrep -f "bore local $TERMINAL_PORT" | head -1)
-          WEBDAV_BORE_PID=$(pgrep -f "bore local $WEBDAV_PORT" | head -1)
+          # ─── Start all 4 bore tunnels ────────────────────────────
+          MCP_BORE=$(start_bore $MCP_PORT) || exit 1
+          MCP_BORE_PID=${MCP_BORE%%:*}
+          MCP_TUNNEL=${MCP_BORE#*:}
 
-          # ─── Start Android bore tunnel ────────────────────────────
+          TERMINAL_BORE=$(start_bore $TERMINAL_PORT) || exit 1
+          TERMINAL_BORE_PID=${TERMINAL_BORE%%:*}
+          TERMINAL_TUNNEL=${TERMINAL_BORE#*:}
+
+          WEBDAV_BORE=$(start_bore $WEBDAV_PORT) || exit 1
+          WEBDAV_BORE_PID=${WEBDAV_BORE%%:*}
+          WEBDAV_TUNNEL=${WEBDAV_BORE#*:}
+
           ANDROID_BORE=$(start_bore $ANDROID_PORT) || exit 1
           ANDROID_BORE_PID=${ANDROID_BORE%%:*}
           ANDROID_TUNNEL=${ANDROID_BORE#*:}
 
           echo ""
           echo "╔══════════════════════════════════════════════════╗"
-          echo "║  🎭 Playwright: tunnel active"
-          echo "║  🖥️ Terminal:   tunnel active"
-          echo "║  📂 WebDAV:     tunnel active"
-          echo "║  📱 Android:    tunnel active"
+          echo "║  🎭 Playwright: $MCP_TUNNEL"
+          echo "║     → $PLAYWRIGHT_WORKER/sse"
+          echo "║  🖥️ Terminal:   $TERMINAL_TUNNEL"
+          echo "║     → $TERMINAL_WORKER/sse"
+          echo "║  📂 WebDAV:    $WEBDAV_TUNNEL"
+          echo "║     → $WEBDAV_WORKER/"
+          echo "║  📱 Android:   $ANDROID_TUNNEL"
+          echo "║     → $ANDROID_WORKER/mcp"
           echo "╚══════════════════════════════════════════════════╝"
           echo ""
 
-          # ─── Save Android tunnel to Redis ─────────────────────────
-          if redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"; then
-            echo "✅ All 4 tunnel URLs saved to Redis!"
-          else
-            echo "⚠️ Android tunnel URL save failed — watchdog will retry"
-          fi
+          # ─── Save to Redis ──────────────────────────────────────
+          redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
+          redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
+          redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
+          redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
+          echo "✅ All URLs saved to Redis!"
 
-          # ─── Watchdog Loop (all 4 services) ───────────────────────
-          echo "🐶 Watchdog started — monitoring all 4 services every 5 seconds..."
+          # ─── Watchdog Loop ──────────────────────────────────────
+          echo "🐶 Watchdog started — monitoring every 5 seconds..."
 
           while true; do
             sleep 5
@@ -475,7 +412,7 @@ jobs:
               MCP_BORE_PID=${NEW_BORE%%:*}
               MCP_TUNNEL=${NEW_BORE#*:}
               redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
-              echo "📡 MCP bore reconnected"
+              echo "📡 MCP bore reconnected → $MCP_TUNNEL"
             fi
 
             if ! nc -z localhost $TERMINAL_PORT 2>/dev/null; then
@@ -486,7 +423,7 @@ jobs:
               TERMINAL_BORE_PID=${NEW_BORE%%:*}
               TERMINAL_TUNNEL=${NEW_BORE#*:}
               redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
-              echo "📡 Terminal bore reconnected"
+              echo "📡 Terminal bore reconnected → $TERMINAL_TUNNEL"
             fi
 
             if ! nc -z localhost $WEBDAV_PORT 2>/dev/null; then
@@ -497,7 +434,7 @@ jobs:
               WEBDAV_BORE_PID=${NEW_BORE%%:*}
               WEBDAV_TUNNEL=${NEW_BORE#*:}
               redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
-              echo "📡 WebDAV bore reconnected"
+              echo "📡 WebDAV bore reconnected → $WEBDAV_TUNNEL"
             fi
 
             if ! nc -z localhost $ANDROID_PORT 2>/dev/null; then
@@ -508,7 +445,7 @@ jobs:
               ANDROID_BORE_PID=${NEW_BORE%%:*}
               ANDROID_TUNNEL=${NEW_BORE#*:}
               redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
-              echo "📡 Android bore reconnected"
+              echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
             fi
 
             # --- Bore PID checks: if bore died → reconnect + update Redis ---
@@ -518,7 +455,7 @@ jobs:
               MCP_BORE_PID=${NEW_BORE%%:*}
               MCP_TUNNEL=${NEW_BORE#*:}
               redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
-              echo "📡 MCP bore reconnected"
+              echo "📡 MCP bore reconnected → $MCP_TUNNEL"
             fi
 
             if ! kill -0 $TERMINAL_BORE_PID 2>/dev/null; then
@@ -527,7 +464,7 @@ jobs:
               TERMINAL_BORE_PID=${NEW_BORE%%:*}
               TERMINAL_TUNNEL=${NEW_BORE#*:}
               redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
-              echo "📡 Terminal bore reconnected"
+              echo "📡 Terminal bore reconnected → $TERMINAL_TUNNEL"
             fi
 
             if ! kill -0 $WEBDAV_BORE_PID 2>/dev/null; then
@@ -536,7 +473,7 @@ jobs:
               WEBDAV_BORE_PID=${NEW_BORE%%:*}
               WEBDAV_TUNNEL=${NEW_BORE#*:}
               redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
-              echo "📡 WebDAV bore reconnected"
+              echo "📡 WebDAV bore reconnected → $WEBDAV_TUNNEL"
             fi
 
             if ! kill -0 $ANDROID_BORE_PID 2>/dev/null; then
@@ -545,6 +482,6 @@ jobs:
               ANDROID_BORE_PID=${NEW_BORE%%:*}
               ANDROID_TUNNEL=${NEW_BORE#*:}
               redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
-              echo "📡 Android bore reconnected"
+              echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
             fi
           done
