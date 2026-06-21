@@ -74,37 +74,6 @@ jobs:
           tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
           echo "✅ All dependencies ready!"
 
-          echo "📱 Installing mobile-mcp for Android automation..."
-          npm install -g @mobilenext/mobile-mcp@latest
-
-          echo "🤖 Setting up Android SDK + emulator..."
-          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
-          export ANDROID_HOME=$ANDROID_SDK_ROOT
-          export ANDROID_AVD_HOME=$HOME/.android/avd
-          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
-
-          echo "🔧 Enabling KVM hardware acceleration..."
-          sudo chown -R $USER /dev/kvm 2>/dev/null || true
-          if [ -e /dev/kvm ]; then
-            echo "✅ /dev/kvm exists"
-          else
-            echo "⚠️ /dev/kvm not found — using software rendering"
-          fi
-
-          echo "📦 Installing Android system image (this may take a minute)..."
-          yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
-          echo "✅ System image installed"
-
-          echo "🏗️ Creating AVD..."
-          mkdir -p $ANDROID_AVD_HOME
-          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
-
-          echo "📋 Verifying AVD created..."
-          avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
-          ls -la $ANDROID_AVD_HOME/ 2>/dev/null || true
-          echo "✅ Android SDK + emulator ready!"
-
       - name: Configure stealth + storage
         run: |
           mkdir -p $SCREENSHOTS_DIR $UPLOADS_DIR
@@ -235,7 +204,30 @@ jobs:
           export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
           export ANDROID_HOME=$ANDROID_SDK_ROOT
           export ANDROID_AVD_HOME=$HOME/.android/avd
-          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+
+          echo "📱 Installing mobile-mcp..."
+          npm install -g @mobilenext/mobile-mcp@latest
+
+          echo "🔧 Enabling KVM hardware acceleration..."
+          sudo chown -R $USER /dev/kvm 2>/dev/null || true
+          if [ -e /dev/kvm ]; then
+            echo "✅ /dev/kvm exists"
+          else
+            echo "⚠️ /dev/kvm not found — using software rendering"
+          fi
+
+          echo "📦 Installing Android system image..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
+          echo "✅ System image installed"
+
+          echo "🏗️ Creating AVD..."
+          mkdir -p $ANDROID_AVD_HOME
+          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
+
+          echo "📋 Verifying AVD created..."
+          avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
 
           echo "📋 Available AVDs:"
           emulator -list-avds
