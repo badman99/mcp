@@ -1,0 +1,8 @@
+name = "webdav-runner"
+main = "index.js"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+[[kv_namespaces]]
+binding = "KV"
+id = "fdb43f992e8f4c72904457ed60b6bafe"

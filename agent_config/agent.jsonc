@@ -1,0 +1,20 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "gha-browser": {
+      "type": "remote",
+      "enabled": false,
+      "url": "https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/sse"
+    },
+    "gha-shell": {
+      "type": "remote",
+      "enabled": false,
+      "url": "https://terminal-runner.YOUR_SUBDOMAIN.workers.dev/sse"
+    },
+    "gha-android": {
+      "type": "remote",
+      "enabled": false,
+      "url": "https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse"
+    }
+  }
+}
