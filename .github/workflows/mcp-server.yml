@@ -167,6 +167,7 @@ jobs:
               cat "$log"
               return 1
             fi
+            echo "::add-mask::http://$url" >&2
             echo "$pid:http://$url"
           }
 
@@ -324,6 +325,7 @@ jobs:
               cat "$log"
               return 1
             fi
+            echo "::add-mask::http://$url" >&2
             echo "$pid:http://$url"
           }
 
