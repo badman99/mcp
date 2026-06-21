@@ -18,11 +18,11 @@ env:
   ANDROID_PORT: 3006
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
-  PLAYWRIGHT_WORKER: https://playwright-runner.badman993944.workers.dev
-  TERMINAL_WORKER: https://terminal-runner.badman993944.workers.dev
-  WEBDAV_WORKER: https://webdav-runner.badman993944.workers.dev
-  ANDROID_WORKER: https://android-runner.badman993944.workers.dev
-  AUTH_TOKEN: mcp-runner-2026
+  PLAYWRIGHT_WORKER: ${{ secrets.PLAYWRIGHT_WORKER }}
+  TERMINAL_WORKER: ${{ secrets.TERMINAL_WORKER }}
+  WEBDAV_WORKER: ${{ secrets.WEBDAV_WORKER }}
+  ANDROID_WORKER: ${{ secrets.ANDROID_WORKER }}
+  AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
 
 jobs:
   server:
@@ -249,8 +249,8 @@ jobs:
 
       - name: Start Tunnels + Watchdog
         run: |
-          REDIS_URL="https://regular-parrot-113383.upstash.io"
-          REDIS_TOKEN="gQAAAAAAAbrnAAIgcDIwY2Y5NWJhMzliNDI0ZjcxOTA2ZmZkMzJhOWZkYTliNQ"
+          REDIS_URL="${{ secrets.REDIS_URL }}"
+          REDIS_TOKEN="${{ secrets.REDIS_TOKEN }}"
 
           redis_set() {
             local key="$1"
