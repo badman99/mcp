@@ -4,10 +4,10 @@ You are a browser automation assistant with remote access to a GitHub Actions ru
 
 | Service | URL | Description |
 |---|---|---|
-| 🎭 Playwright MCP | `https://playwright-runner.badman993944.workers.dev/sse` | Browser automation |
-| 🖥️ Terminal MCP | `https://terminal-runner.badman993944.workers.dev/sse` | Shell commands (persistent session) |
-| 📂 WebDAV | `https://webdav-runner.badman993944.workers.dev/` | File operations (mountable) |
-| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/sse` | Android emulator automation (mobile-mcp) |
+| 🎭 Playwright MCP | `https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/sse` | Browser automation |
+| 🖥️ Terminal MCP | `https://terminal-runner.YOUR_SUBDOMAIN.workers.dev/sse` | Shell commands (persistent session) |
+| 📂 WebDAV | `https://webdav-runner.YOUR_SUBDOMAIN.workers.dev/` | File operations (mountable) |
+| 📱 Android MCP | `https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse` | Android emulator automation (mobile-mcp) |
 
 ---
 
@@ -24,32 +24,32 @@ execute_command(command: "cd /tmp && pwd", session: "main")
 
 ## 📂 WebDAV — File Operations + OS Level Mount
 
-**Base URL:** `https://webdav-runner.badman993944.workers.dev/`
+**Base URL:** `https://webdav-runner.YOUR_SUBDOMAIN.workers.dev/`
 
 ### Windows mein mount karo:
 ```
 # Run karo (Win+R → cmd):
-net use Z: https://webdav-runner.badman993944.workers.dev /persistent:no
+net use Z: https://webdav-runner.YOUR_SUBDOMAIN.workers.dev /persistent:no
 
 # Ya File Explorer mein:
-# "This PC" → "Map network drive" → Z: → https://webdav-runner.badman993944.workers.dev
+# "This PC" → "Map network drive" → Z: → https://webdav-runner.YOUR_SUBDOMAIN.workers.dev
 ```
 
 ### Mac mein mount karo:
 ```
 # Finder → Go → Connect to Server (Cmd+K):
-https://webdav-runner.badman993944.workers.dev
+https://webdav-runner.YOUR_SUBDOMAIN.workers.dev
 
 # Ya terminal se:
 mkdir ~/runner-disk
-mount_webdav https://webdav-runner.badman993944.workers.dev ~/runner-disk
+mount_webdav https://webdav-runner.YOUR_SUBDOMAIN.workers.dev ~/runner-disk
 ```
 
 ### Linux mein mount karo:
 ```bash
 sudo apt install davfs2
 sudo mkdir /mnt/runner
-sudo mount -t davfs https://webdav-runner.badman993944.workers.dev /mnt/runner
+sudo mount -t davfs https://webdav-runner.YOUR_SUBDOMAIN.workers.dev /mnt/runner
 ```
 
 Mount ho jaane ke baad — **poora `/tmp/storage` tera local drive ban jaata hai!** 🎉
@@ -71,7 +71,7 @@ Mount ho jaane ke baad — **poora `/tmp/storage` tera local drive ban jaata hai
 
 Android emulator (API 34, pixel_6) running on the runner via `mobile-mcp`.
 
-**MCP URL:** `https://android-runner.badman993944.workers.dev/sse`
+**MCP URL:** `https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse`
 
 Available tools (via mobile-mcp):
 - `mobile_list_available_devices` — list connected devices

@@ -14,10 +14,10 @@ User → static URL (Worker) → Redis (latest bore port) → bore.pub:XXXXX →
 
 | Worker | URL | Redis Key | KV Namespace |
 |---|---|---|---|
-| `playwright-runner` | `https://playwright-runner.badman993944.workers.dev` | `pw:TUNNEL_URL` | `882a7bf7...` |
-| `terminal-runner` | `https://terminal-runner.badman993944.workers.dev` | `tm:TUNNEL_URL` | `958a52cd...` |
-| `webdav-runner` | `https://webdav-runner.badman993944.workers.dev` | `wd:TUNNEL_URL` | `fdb43f99...` |
-| `android-runner` | `https://android-runner.badman993944.workers.dev` | `an:TUNNEL_URL` | `aeb45ea2...` |
+| `playwright-runner` | `https://playwright-runner.YOUR_SUBDOMAIN.workers.dev` | `pw:TUNNEL_URL` | `882a7bf7...` |
+| `terminal-runner` | `https://terminal-runner.YOUR_SUBDOMAIN.workers.dev` | `tm:TUNNEL_URL` | `958a52cd...` |
+| `webdav-runner` | `https://webdav-runner.YOUR_SUBDOMAIN.workers.dev` | `wd:TUNNEL_URL` | `fdb43f99...` |
+| `android-runner` | `https://android-runner.YOUR_SUBDOMAIN.workers.dev` | `an:TUNNEL_URL` | `aeb45ea2...` |
 
 ## Endpoints
 
@@ -128,7 +128,7 @@ The `webdav-runner` worker additionally allows WebDAV-specific HTTP methods in C
 ## Authentication
 
 All management endpoints (`/register`, `/activate`) require:
-- Header: `X-Auth-Token: mcp-runner-2026`
-- Or query param: `?token=mcp-runner-2026`
+- Header: `X-Auth-Token: YOUR_AUTH_TOKEN`
+- Or query param: `?token=YOUR_AUTH_TOKEN`
 
 Proxy endpoints (`/sse`, `/mcp`, `/*`) are open — no auth needed for MCP clients to connect.

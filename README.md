@@ -9,17 +9,17 @@ Go to **Actions → Playwright MCP Server → Run workflow**
 
 Or hit the activate endpoint:
 ```
-https://playwright-runner.badman993944.workers.dev/activate?token=mcp-runner-2026
+https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/activate?token=YOUR_AUTH_TOKEN
 ```
 
 ### 2. Service URLs
 
 | Service | URL | Description |
 |---|---|---|
-| 🎭 Playwright MCP | `https://playwright-runner.badman993944.workers.dev/sse` | Headless Chromium browser automation (stealth mode) |
-| 🖥️ Terminal MCP | `https://terminal-runner.badman993944.workers.dev/sse` | Persistent shell on Ubuntu runner |
-| 📂 WebDAV | `https://webdav-runner.badman993944.workers.dev/` | File system access (mountable as network drive) |
-| 📱 Android MCP | `https://android-runner.badman993944.workers.dev/sse` | Android 14 emulator automation (mobile-mcp) |
+| 🎭 Playwright MCP | `https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/sse` | Headless Chromium browser automation (stealth mode) |
+| 🖥️ Terminal MCP | `https://terminal-runner.YOUR_SUBDOMAIN.workers.dev/sse` | Persistent shell on Ubuntu runner |
+| 📂 WebDAV | `https://webdav-runner.YOUR_SUBDOMAIN.workers.dev/` | File system access (mountable as network drive) |
+| 📱 Android MCP | `https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse` | Android 14 emulator automation (mobile-mcp) |
 
 ## 📝 Configuration
 
@@ -32,17 +32,17 @@ Add to your `opencode.jsonc`:
     "gha-browser": {
       "type": "remote",
       "enabled": true,
-      "url": "https://playwright-runner.badman993944.workers.dev/sse"
+      "url": "https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/sse"
     },
     "gha-shell": {
       "type": "remote",
       "enabled": true,
-      "url": "https://terminal-runner.badman993944.workers.dev/sse"
+      "url": "https://terminal-runner.YOUR_SUBDOMAIN.workers.dev/sse"
     },
     "gha-android": {
       "type": "remote",
       "enabled": true,
-      "url": "https://android-runner.badman993944.workers.dev/sse"
+      "url": "https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse"
     }
   }
 }
@@ -55,15 +55,15 @@ Add to `claude_desktop_config.json`:
   "mcpServers": {
     "playwright": {
       "type": "sse",
-      "url": "https://playwright-runner.badman993944.workers.dev/sse"
+      "url": "https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/sse"
     },
     "terminal": {
       "type": "sse",
-      "url": "https://terminal-runner.badman993944.workers.dev/sse"
+      "url": "https://terminal-runner.YOUR_SUBDOMAIN.workers.dev/sse"
     },
     "android": {
       "type": "sse",
-      "url": "https://android-runner.badman993944.workers.dev/sse"
+      "url": "https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse"
     }
   }
 }
@@ -71,9 +71,9 @@ Add to `claude_desktop_config.json`:
 
 ### Claude.ai (Web)
 Settings → Custom Integrations → Add connector:
-- **Playwright**: `https://playwright-runner.badman993944.workers.dev/sse`
-- **Terminal**: `https://terminal-runner.badman993944.workers.dev/sse`
-- **Android**: `https://android-runner.badman993944.workers.dev/sse`
+- **Playwright**: `https://playwright-runner.YOUR_SUBDOMAIN.workers.dev/sse`
+- **Terminal**: `https://terminal-runner.YOUR_SUBDOMAIN.workers.dev/sse`
+- **Android**: `https://android-runner.YOUR_SUBDOMAIN.workers.dev/sse`
 
 ## 🏗️ Architecture
 

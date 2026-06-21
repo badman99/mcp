@@ -1,4 +1,4 @@
-const AUTH_TOKEN = "mcp-runner-2026";
+const AUTH_TOKEN = "YOUR_AUTH_TOKEN";
 const GITHUB_REPO = "badman99/mcp";
 const WORKFLOW_FILE = "mcp-server.yml";
 const REDIS_URL = "https://regular-parrot-113383.upstash.io";
