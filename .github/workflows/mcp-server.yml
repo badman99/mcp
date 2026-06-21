@@ -148,10 +148,10 @@ jobs:
           redis_set() {
             local key="$1"
             local value="$2"
-            curl -sf -X POST "${REDIS_URL}" \
+            curl -s -X POST "${REDIS_URL}" \
               -H "Authorization: Bearer ${REDIS_TOKEN}" \
               -H "Content-Type: application/json" \
-              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1
+              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1 || true
           }
 
           start_bore() {
@@ -303,10 +303,10 @@ jobs:
           redis_set() {
             local key="$1"
             local value="$2"
-            curl -sf -X POST "${REDIS_URL}" \
+            curl -s -X POST "${REDIS_URL}" \
               -H "Authorization: Bearer ${REDIS_TOKEN}" \
               -H "Content-Type: application/json" \
-              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1
+              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1 || true
           }
 
           start_bore() {
