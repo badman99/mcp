@@ -293,6 +293,16 @@ The GitHub Actions runner has a **6-hour max uptime**. After that (or if it cras
 
 ### Recovery Steps
 
+> 🧠 **ALWAYS try reconnecting MCP first before calling `/activate`!**
+>
+> Most failures are just **stale session IDs** — the runner is still alive, but the AI agent's MCP session died (timeout, network blip, service restart by watchdog). In this case:
+>
+> 1. Tell the user: *"MCP session seems stale. Please go to MCP settings, toggle the server OFF then ON (or remove and re-add). This creates a fresh session without restarting the runner."*
+> 2. Wait for the user to reconnect
+> 3. Try a simple tool call to verify
+>
+> Only if reconnecting MCP **doesn't work** (runner is actually dead), proceed to `/activate` below.
+
 **Step 1: Identify which service is down**
 
 Check which MCP tool is failing:
