@@ -573,9 +573,83 @@ jobs:
 
           # ─── Watchdog Loop ───────────────────────────────────────
           echo "🐶 Watchdog started — monitoring all 4 services every 5 seconds..."
+          echo "⏰ Auto-snapshot will trigger after 220 minutes (3h 40m)..."
+
+          START_TIME=$(date +%s)
+          SNAPSHOT_TAKEN=0
+          SNAPSHOT_TRIGGER_SEC=$((220 * 60))  # 3 hours 40 minutes
 
           while true; do
             sleep 5
+
+            # ─── Auto-snapshot timer ──────────────────────────────
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            if [ "$SNAPSHOT_TAKEN" = "0" ] && [ $ELAPSED -ge $SNAPSHOT_TRIGGER_SEC ]; then
+              echo ""
+              echo "📸 ═════════════════════════════════════════════"
+              echo "📸 Auto-snapshot triggered! (${ELAPSED}s elapsed)"
+              echo "📸 ═════════════════════════════════════════════"
+
+              export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+              QEMU=$ANDROID_SDK_ROOT/emulator/qemu-img
+              AVD_DIR="$HOME/.android/avd/mcp_android.avd"
+              SNAP_DIR="/tmp/storage/auto-snapshot"
+              mkdir -p "$SNAP_DIR"
+
+              # 1. Flush data to disk
+              echo "📸 Flushing data to disk..."
+              adb shell sync 2>/dev/null || true
+              adb shell stop 2>/dev/null || true
+              sleep 3
+              adb shell sync 2>/dev/null || true
+
+              # 2. Create 3 snapshot files
+              echo "📸 Creating snapshot files..."
+              $QEMU convert -U -O qcow2 "$AVD_DIR/userdata-qemu.img.qcow2" "$SNAP_DIR/full-snapshot.qcow2" 2>/dev/null || true
+              $QEMU convert -U -O qcow2 "$AVD_DIR/encryptionkey.img.qcow2" "$SNAP_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || true
+              cp "$AVD_DIR/config.ini" "$SNAP_DIR/config.ini" 2>/dev/null || true
+
+              # 3. Generate hash from config.ini
+              CONFIG_INI="$SNAP_DIR/config.ini"
+              if [ -f "$CONFIG_INI" ]; then
+                SNAP_API=$(grep 'image.sysdir.1' "$CONFIG_INI" | grep -oE 'android-[0-9]+' | head -1)
+                SNAP_IMG=$(grep 'tag.id=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_DEV=$(grep 'hw.device.name=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_STO=$(grep 'disk.dataPartition.size=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_ARCH=$(grep 'abi.type=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_FS=$(grep 'hw.useext4=' "$CONFIG_INI" | cut -d= -f2)
+                HASH_INPUT="${SNAP_API}|${SNAP_IMG}|${SNAP_DEV}|${SNAP_STO}|${SNAP_ARCH}|${SNAP_FS}"
+                SNAP_HASH=$(echo -n "$HASH_INPUT" | sha256sum | cut -d' ' -f1)
+                echo "$SNAP_HASH" > "$SNAP_DIR/snapshot.hash"
+                echo "📸 Hash: $SNAP_HASH"
+              fi
+
+              # 4. Zip all 4 files (3 snapshots + hash)
+              echo "📸 Zipping snapshot..."
+              cd "$SNAP_DIR"
+              zip -j /tmp/storage/android-snapshot.zip \
+                full-snapshot.qcow2 \
+                encryptionkey-snapshot.qcow2 \
+                config.ini \
+                snapshot.hash 2>/dev/null || {
+                  # If zip fails, try without one file
+                  zip -j /tmp/storage/android-snapshot.zip \
+                    full-snapshot.qcow2 \
+                    encryptionkey-snapshot.qcow2 \
+                    config.ini 2>/dev/null || true
+                }
+              cd -
+
+              ZIP_SIZE=$(du -sh /tmp/storage/android-snapshot.zip 2>/dev/null | cut -f1)
+              echo "📸 Snapshot zip created: $ZIP_SIZE"
+              echo "📸 Path: /tmp/storage/android-snapshot.zip"
+              echo "📸 ═════════════════════════════════════════════"
+              echo ""
+
+              SNAPSHOT_TAKEN=1
+            fi
+
+            # ─── Service monitoring continues ─────────────────────
 
             # --- Port checks: if port dead → kill old bore, restart service + reconnect bore ---
             if ! nc -z localhost $MCP_PORT 2>/dev/null; then
@@ -659,3 +733,70 @@ jobs:
               echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
             fi
           done
+
+      - name: Create Final Snapshot (if not already taken)
+        if: always()
+        run: |
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+          QEMU=$ANDROID_SDK_ROOT/emulator/qemu-img
+          AVD_DIR="$HOME/.android/avd/mcp_android.avd"
+          SNAP_DIR="/tmp/storage/auto-snapshot"
+          mkdir -p "$SNAP_DIR"
+
+          # Check if auto-snapshot already taken
+          if [ -f /tmp/storage/android-snapshot.zip ]; then
+            echo "✅ Auto-snapshot already exists, skipping..."
+            ls -lh /tmp/storage/android-snapshot.zip
+            exit 0
+          fi
+
+          echo "📸 Creating final snapshot..."
+
+          # 1. Flush data
+          adb shell sync 2>/dev/null || true
+          adb shell stop 2>/dev/null || true
+          sleep 3
+          adb shell sync 2>/dev/null || true
+
+          # 2. Create 3 snapshot files
+          $QEMU convert -U -O qcow2 "$AVD_DIR/userdata-qemu.img.qcow2" "$SNAP_DIR/full-snapshot.qcow2" 2>/dev/null || echo "⚠️ userdata convert failed"
+          $QEMU convert -U -O qcow2 "$AVD_DIR/encryptionkey.img.qcow2" "$SNAP_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || echo "⚠️ encryptionkey convert failed"
+          cp "$AVD_DIR/config.ini" "$SNAP_DIR/config.ini" 2>/dev/null || echo "⚠️ config.ini copy failed"
+
+          # 3. Generate hash
+          CONFIG_INI="$SNAP_DIR/config.ini"
+          if [ -f "$CONFIG_INI" ]; then
+            SNAP_API=$(grep 'image.sysdir.1' "$CONFIG_INI" | grep -oE 'android-[0-9]+' | head -1)
+            SNAP_IMG=$(grep 'tag.id=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_DEV=$(grep 'hw.device.name=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_STO=$(grep 'disk.dataPartition.size=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_ARCH=$(grep 'abi.type=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_FS=$(grep 'hw.useext4=' "$CONFIG_INI" | cut -d= -f2)
+            HASH_INPUT="${SNAP_API}|${SNAP_IMG}|${SNAP_DEV}|${SNAP_STO}|${SNAP_ARCH}|${SNAP_FS}"
+            SNAP_HASH=$(echo -n "$HASH_INPUT" | sha256sum | cut -d' ' -f1)
+            echo "$SNAP_HASH" > "$SNAP_DIR/snapshot.hash"
+            echo "🔐 Hash: $SNAP_HASH"
+          fi
+
+          # 4. Zip
+          cd "$SNAP_DIR"
+          zip -j /tmp/storage/android-snapshot.zip \
+            full-snapshot.qcow2 \
+            encryptionkey-snapshot.qcow2 \
+            config.ini \
+            snapshot.hash 2>/dev/null || true
+          cd -
+
+          echo "✅ Final snapshot created:"
+          ls -lh /tmp/storage/android-snapshot.zip 2>/dev/null || echo "⚠️ No snapshot zip created"
+
+      - name: Upload Snapshot Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-snapshot-${{ github.run_id }}
+          path: /tmp/storage/android-snapshot.zip
+          retention-days: 90
+          compression-level: 0
