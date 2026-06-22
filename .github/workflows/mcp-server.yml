@@ -222,12 +222,12 @@ jobs:
 
           echo "📦 Installing Android system image..."
           yes | sdkmanager --licenses > /dev/null 2>&1 || true
-          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;google_apis;x86_64"
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-34;default;x86_64"
           echo "✅ System image installed"
 
           echo "🏗️ Creating AVD..."
           mkdir -p $ANDROID_AVD_HOME
-          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
+          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;default;x86_64" --device "pixel_6" --force
 
           echo "⚙️ Configuring AVD: 32GB storage + 720p + hardware disable..."
           CONFIG_INI="$ANDROID_AVD_HOME/mcp_android.avd/config.ini"
