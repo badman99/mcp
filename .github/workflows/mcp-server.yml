@@ -16,7 +16,6 @@ env:
   TERMINAL_PORT: 3004
   WEBDAV_PORT: 3005
   ANDROID_PORT: 3006
-  SNAPSHOT_TAG: android-snapshot-20260622
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
   PLAYWRIGHT_WORKER: ${{ secrets.PLAYWRIGHT_WORKER }}
@@ -278,6 +277,7 @@ jobs:
 
           HASH_INPUT="${SNAPSHOT_ANDROID_API}|${SNAPSHOT_IMAGE_TYPE}|${SNAPSHOT_DEVICE}|${SNAPSHOT_STORAGE}|${SNAPSHOT_CPU_ARCH}|${SNAPSHOT_FS}"
           CURRENT_HASH=$(echo -n "$HASH_INPUT" | sha256sum | cut -d' ' -f1)
+          export CURRENT_HASH
 
           echo ""
           echo "╔══════════════════════════════════════════════════╗"
@@ -293,42 +293,78 @@ jobs:
           echo ""
 
           # ─── Snapshot Restore with Hash Verification ──────────────
+          # Find LATEST release whose hash matches current config
+          # If multiple releases have same hash, newest one wins
           SNAPSHOT_RESTORED=0
           SNAPSHOT_DIR="/tmp/storage/snapshot"
           mkdir -p "$SNAPSHOT_DIR"
 
-          echo "📥 Attempting to restore from snapshot release ($SNAPSHOT_TAG)..."
+          echo "📥 Searching for compatible snapshot release..."
+          echo "📋 Current hash: $CURRENT_HASH"
 
-          # Fetch release body to extract hash (look specifically in Compatibility Hash section)
-          RELEASE_BODY=$(curl -sf "https://api.github.com/repos/badman99/mcp/releases/tags/${SNAPSHOT_TAG}" \
-            -H "Accept: application/vnd.github+json" \
-            2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('body',''))" 2>/dev/null || echo "")
-          RELEASE_HASH=$(echo "$RELEASE_BODY" | grep -A5 'Compatibility Hash' | grep -oE '[0-9a-f]{64}' | head -1 || echo "")
+          # Fetch all releases (newest first) and find one with matching hash
+          MATCHED_TAG=""
+          MATCHED_HASH=""
+          python3 << 'PYEOF' > /tmp/snapshot_search.txt
+import json, urllib.request, os, sys
 
-          if [ -n "$RELEASE_HASH" ]; then
-            echo "📋 Release hash:  $RELEASE_HASH"
+current_hash = os.environ.get("CURRENT_HASH", "")
+repo = "badman99/mcp"
+
+try:
+    req = urllib.request.Request(
+        f"https://api.github.com/repos/{repo}/releases?per_page=30",
+        headers={"Accept": "application/vnd.github+json"}
+    )
+    resp = urllib.request.urlopen(req)
+    releases = json.loads(resp.read())
+except Exception as e:
+    print(f"ERROR: {e}")
+    sys.exit(0)
+
+print(f"Found {len(releases)} releases. Searching for matching hash...")
+print(f"Looking for hash: {current_hash}")
+
+for r in releases:
+    tag = r.get("tag_name", "")
+    body = r.get("body", "")
+    # Extract hash from "Compatibility Hash" section
+    import re
+    hash_match = re.search(r'Compatibility Hash.*?([0-9a-f]{64})', body, re.DOTALL)
+    release_hash = hash_match.group(1) if hash_match else ""
+
+    if not release_hash:
+        # Try finding any 64-char hex in body
+        hash_match = re.search(r'([0-9a-f]{64})', body)
+        release_hash = hash_match.group(1) if hash_match else ""
+
+    print(f"  {tag}: hash={release_hash[:16]}... {'✅ MATCH' if release_hash == current_hash else '❌ mismatch' if release_hash else '⚠️ no hash'}")
+
+    if release_hash == current_hash:
+        print(f"MATCHED_TAG={tag}")
+        print(f"MATCHED_HASH={release_hash}")
+        break
+PYEOF
+
+          # Parse search results
+          MATCHED_TAG=$(grep '^MATCHED_TAG=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+          MATCHED_HASH=$(grep '^MATCHED_HASH=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+
+          # Show search results in log
+          cat /tmp/snapshot_search.txt 2>/dev/null
+
+          if [ -n "$MATCHED_TAG" ]; then
+            echo ""
+            echo "✅ Hash MATCH with latest release: $MATCHED_TAG"
+            echo "📋 Release hash:  $MATCHED_HASH"
             echo "📋 Current hash:  $CURRENT_HASH"
 
-            if [ "$RELEASE_HASH" = "$CURRENT_HASH" ]; then
-              echo "✅ Hash MATCH! Configuration is compatible with snapshot."
-              HASH_OK=1
-            else
-              echo "❌ Hash MISMATCH! Configuration has changed."
-              echo "⚠️ Snapshot was created with different breaking settings."
-              echo "⚠️ Will boot fresh instead — snapshot is incompatible."
-              HASH_OK=0
-            fi
-          else
-            echo "⚠️ Could not fetch release hash — will try restore anyway"
-            HASH_OK=1
-          fi
-
-          if [ "$HASH_OK" = "1" ]; then
-            wget -q --timeout=60 "https://github.com/badman99/mcp/releases/download/${SNAPSHOT_TAG}/full-snapshot.qcow2" -O "$SNAPSHOT_DIR/full-snapshot.qcow2" 2>/dev/null && {
-              wget -q --timeout=60 "https://github.com/badman99/mcp/releases/download/${SNAPSHOT_TAG}/encryptionkey-snapshot.qcow2" -O "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || true
+            # Download from matched release
+            wget -q --timeout=120 "https://github.com/badman99/mcp/releases/download/${MATCHED_TAG}/full-snapshot.qcow2" -O "$SNAPSHOT_DIR/full-snapshot.qcow2" 2>/dev/null && {
+              wget -q --timeout=120 "https://github.com/badman99/mcp/releases/download/${MATCHED_TAG}/encryptionkey-snapshot.qcow2" -O "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || true
 
               if [ -f "$SNAPSHOT_DIR/full-snapshot.qcow2" ] && [ -s "$SNAPSHOT_DIR/full-snapshot.qcow2" ]; then
-                echo "✅ Snapshot downloaded! Restoring..."
+                echo "✅ Snapshot downloaded from $MATCHED_TAG! Restoring..."
 
                 # Convert qcow2 → raw and replace userdata
                 $ANDROID_SDK_ROOT/emulator/qemu-img convert -O raw "$SNAPSHOT_DIR/full-snapshot.qcow2" "$AVD_DIR/userdata-qemu.img"
@@ -342,13 +378,18 @@ jobs:
                 fi
 
                 SNAPSHOT_RESTORED=1
-                echo "✅ Snapshot restore complete! AnyDesk + apps + permissions included."
+                echo "✅ Snapshot restore complete! Source: $MATCHED_TAG"
               else
                 echo "⚠️ Snapshot download failed or empty — will boot fresh"
               fi
             } || {
               echo "⚠️ Snapshot download failed — will boot fresh (AnyDesk setup will run)"
             }
+          else
+            echo ""
+            echo "❌ No compatible release found!"
+            echo "⚠️ No release has matching hash — will boot fresh"
+            echo "⚠️ AnyDesk setup will run on this boot"
           fi
 
           echo "📋 Verifying AVD created..."
