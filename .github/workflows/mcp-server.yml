@@ -242,6 +242,7 @@ jobs:
             -gpu swiftshader_indirect -no-boot-anim \
             -wipe-data -accel auto \
             -netdelay none -netspeed full \
+            -memory 8192 -cores 4 -disk-data-size 32768 \
             > /tmp/emulator.log 2>&1 &
           EMU_PID=$!
           echo "Emulator PID: $EMU_PID"
