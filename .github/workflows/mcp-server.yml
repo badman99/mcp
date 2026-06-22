@@ -28,7 +28,7 @@ env:
 jobs:
   server:
     runs-on: ubuntu-latest
-    timeout-minutes: 240
+    timeout-minutes: 330
 
     steps:
       - uses: actions/checkout@v4
@@ -573,11 +573,11 @@ jobs:
 
           # ─── Watchdog Loop ───────────────────────────────────────
           echo "🐶 Watchdog started — monitoring all 4 services every 5 seconds..."
-          echo "⏰ Auto-snapshot will trigger after 220 minutes (3h 40m)..."
+          echo "⏰ Auto-snapshot will trigger after 310 minutes (5h 10m)..."
 
           START_TIME=$(date +%s)
           SNAPSHOT_TAKEN=0
-          SNAPSHOT_TRIGGER_SEC=$((220 * 60))  # 3 hours 40 minutes
+          SNAPSHOT_TRIGGER_SEC=$((310 * 60))  # 5 hours 10 minutes
 
           while true; do
             sleep 5
@@ -647,9 +647,11 @@ jobs:
               echo ""
 
               SNAPSHOT_TAKEN=1
-            fi
 
-            # ─── Service monitoring continues ─────────────────────
+              # Break out of watchdog loop — post steps will handle artifact upload
+              echo "📸 Snapshot done! Breaking watchdog loop for artifact upload..."
+              break
+            fi
 
             # --- Port checks: if port dead → kill old bore, restart service + reconnect bore ---
             if ! nc -z localhost $MCP_PORT 2>/dev/null; then
