@@ -229,6 +229,12 @@ jobs:
           mkdir -p $ANDROID_AVD_HOME
           echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
 
+          echo "⚙️ Configuring AVD storage to 32GB..."
+          CONFIG_INI="$ANDROID_AVD_HOME/mcp_android.avd/config.ini"
+          sed -i 's/disk.dataPartition.size=.*/disk.dataPartition.size=32768M/' "$CONFIG_INI"
+          grep -q "disk.dataPartition.size" "$CONFIG_INI" || echo "disk.dataPartition.size=32768M" >> "$CONFIG_INI"
+          grep "disk.dataPartition.size" "$CONFIG_INI" && echo "✅ Storage set to 32GB"
+
           echo "📋 Verifying AVD created..."
           avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
 
@@ -242,7 +248,7 @@ jobs:
             -gpu swiftshader_indirect -no-boot-anim \
             -wipe-data -accel auto \
             -netdelay none -netspeed full \
-            -memory 8192 -cores 4 -disk-data-size 32768 \
+            -memory 8192 -cores 4 \
             > /tmp/emulator.log 2>&1 &
           EMU_PID=$!
           echo "Emulator PID: $EMU_PID"
