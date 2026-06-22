@@ -16,6 +16,7 @@ env:
   TERMINAL_PORT: 3004
   WEBDAV_PORT: 3005
   ANDROID_PORT: 3006
+  SNAPSHOT_TAG: android-snapshot-20260622
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
   PLAYWRIGHT_WORKER: ${{ secrets.PLAYWRIGHT_WORKER }}
@@ -259,6 +260,39 @@ jobs:
 
           echo "✅ AVD config: 32GB storage, original pixel_6 display, hardware disabled"
 
+          # ─── Snapshot Restore ─────────────────────────────────
+          SNAPSHOT_RESTORED=0
+          AVD_DIR="$ANDROID_AVD_HOME/mcp_android.avd"
+          SNAPSHOT_DIR="/tmp/storage/snapshot"
+          mkdir -p "$SNAPSHOT_DIR"
+
+          echo "📥 Attempting to restore from snapshot release ($SNAPSHOT_TAG)..."
+          wget -q --timeout=30 "https://github.com/badman99/mcp/releases/download/${SNAPSHOT_TAG}/full-snapshot.qcow2" -O "$SNAPSHOT_DIR/full-snapshot.qcow2" 2>/dev/null && {
+            wget -q --timeout=30 "https://github.com/badman99/mcp/releases/download/${SNAPSHOT_TAG}/encryptionkey-snapshot.qcow2" -O "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || true
+
+            if [ -f "$SNAPSHOT_DIR/full-snapshot.qcow2" ] && [ -s "$SNAPSHOT_DIR/full-snapshot.qcow2" ]; then
+              echo "✅ Snapshot downloaded! Restoring..."
+
+              # Convert qcow2 → raw and replace userdata
+              $ANDROID_SDK_ROOT/emulator/qemu-img convert -O raw "$SNAPSHOT_DIR/full-snapshot.qcow2" "$AVD_DIR/userdata-qemu.img"
+              rm -f "$AVD_DIR/userdata-qemu.img.qcow2"
+
+              # Restore encryption key
+              if [ -f "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" ] && [ -s "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" ]; then
+                $ANDROID_SDK_ROOT/emulator/qemu-img convert -O raw "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" "$AVD_DIR/encryptionkey.img"
+                rm -f "$AVD_DIR/encryptionkey.img.qcow2"
+                echo "✅ Encryption key restored!"
+              fi
+
+              SNAPSHOT_RESTORED=1
+              echo "✅ Snapshot restore complete! AnyDesk + apps + permissions included."
+            else
+              echo "⚠️ Snapshot download failed or empty — will boot fresh"
+            fi
+          } || {
+            echo "⚠️ No snapshot found — will boot fresh (AnyDesk setup will run)"
+          }
+
           echo "📋 Verifying AVD created..."
           avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
 
@@ -266,14 +300,14 @@ jobs:
           emulator -list-avds
 
           echo "🤖 Booting Android emulator (KVM accelerated)..."
-          emulator -avd mcp_android \
-            -no-window -no-audio -no-snapshot \
-            -no-snapshot-save -no-snapshot-load \
-            -gpu swiftshader_indirect -no-boot-anim \
-            -wipe-data -accel auto \
-            -netdelay none -netspeed full \
-            -memory 8192 -cores 4 \
-            > /tmp/emulator.log 2>&1 &
+          BOOT_FLAGS="-no-window -no-audio -no-snapshot -no-snapshot-save -no-snapshot-load -gpu swiftshader_indirect -no-boot-anim -accel auto -netdelay none -netspeed full -memory 8192 -cores 4"
+          if [ "$SNAPSHOT_RESTORED" = "1" ]; then
+            echo "📦 Booting from snapshot (no -wipe-data)..."
+            emulator -avd mcp_android $BOOT_FLAGS > /tmp/emulator.log 2>&1 &
+          else
+            echo "📦 Booting fresh (with -wipe-data)..."
+            emulator -avd mcp_android -wipe-data $BOOT_FLAGS > /tmp/emulator.log 2>&1 &
+          fi
           EMU_PID=$!
           echo "Emulator PID: $EMU_PID"
 
@@ -321,8 +355,12 @@ jobs:
           sleep 2
           adb shell whoami && echo "✅ Root access confirmed!" || echo "⚠️ Root not available"
 
-          echo "🖥️ Setting up AnyDesk for remote control..."
-          bash scripts/anydesk-setup.sh || echo "⚠️ AnyDesk setup incomplete (non-fatal)"
+          if [ "$SNAPSHOT_RESTORED" = "1" ]; then
+            echo "✅ AnyDesk already installed from snapshot — skipping setup"
+          else
+            echo "🖥️ Setting up AnyDesk for remote control..."
+            bash scripts/anydesk-setup.sh || echo "⚠️ AnyDesk setup incomplete (non-fatal)"
+          fi
 
           echo "📲 Starting mobile-mcp via mcp-proxy on :$ANDROID_PORT..."
           mcp-proxy \
