@@ -229,11 +229,35 @@ jobs:
           mkdir -p $ANDROID_AVD_HOME
           echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-34;google_apis;x86_64" --device "pixel_6" --force
 
-          echo "⚙️ Configuring AVD storage to 32GB..."
+          echo "⚙️ Configuring AVD: 32GB storage + 720p + hardware disable..."
           CONFIG_INI="$ANDROID_AVD_HOME/mcp_android.avd/config.ini"
+
+          # 32GB storage
           sed -i 's/disk.dataPartition.size=.*/disk.dataPartition.size=32768M/' "$CONFIG_INI"
           grep -q "disk.dataPartition.size" "$CONFIG_INI" || echo "disk.dataPartition.size=32768M" >> "$CONFIG_INI"
-          grep "disk.dataPartition.size" "$CONFIG_INI" && echo "✅ Storage set to 32GB"
+
+          # 1. Screen resolution 720x1280 (saves ~300-500MB RAM)
+          sed -i 's/hw.lcd.width=.*/hw.lcd.width=720/' "$CONFIG_INI"
+          grep -q "hw.lcd.width" "$CONFIG_INI" || echo "hw.lcd.width=720" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.height=.*/hw.lcd.height=1280/' "$CONFIG_INI"
+          grep -q "hw.lcd.height" "$CONFIG_INI" || echo "hw.lcd.height=1280" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.density=.*/hw.lcd.density=320/' "$CONFIG_INI"
+          grep -q "hw.lcd.density" "$CONFIG_INI" || echo "hw.lcd.density=320" >> "$CONFIG_INI"
+
+          # 2. Disable unused hardware (saves ~200MB RAM)
+          sed -i 's/hw.camera.back=.*/hw.camera.back=none/' "$CONFIG_INI"
+          grep -q "hw.camera.back" "$CONFIG_INI" || echo "hw.camera.back=none" >> "$CONFIG_INI"
+          sed -i 's/hw.camera.front=.*/hw.camera.front=none/' "$CONFIG_INI"
+          grep -q "hw.camera.front" "$CONFIG_INI" || echo "hw.camera.front=none" >> "$CONFIG_INI"
+          sed -i 's/hw.gps=.*/hw.gps=no/' "$CONFIG_INI"
+          grep -q "hw.gps" "$CONFIG_INI" || echo "hw.gps=no" >> "$CONFIG_INI"
+          echo "hw.sensor.gyroscope=no" >> "$CONFIG_INI"
+          echo "hw.sensor.accelerometer=no" >> "$CONFIG_INI"
+          echo "hw.sensor.proximity=no" >> "$CONFIG_INI"
+          echo "hw.sensor.light=no" >> "$CONFIG_INI"
+          echo "hw.sensor.orientation=no" >> "$CONFIG_INI"
+
+          echo "✅ AVD config: 32GB storage, 720p, hardware disabled"
 
           echo "📋 Verifying AVD created..."
           avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
