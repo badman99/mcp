@@ -299,10 +299,11 @@ jobs:
 
           echo "📥 Attempting to restore from snapshot release ($SNAPSHOT_TAG)..."
 
-          # Fetch release body to extract hash
-          RELEASE_HASH=$(curl -sf "https://api.github.com/repos/badman99/mcp/releases/tags/${SNAPSHOT_TAG}" \
+          # Fetch release body to extract hash (look specifically in Compatibility Hash section)
+          RELEASE_BODY=$(curl -sf "https://api.github.com/repos/badman99/mcp/releases/tags/${SNAPSHOT_TAG}" \
             -H "Accept: application/vnd.github+json" \
-            2>/dev/null | grep -oE '[0-9a-f]{64}' | head -1 || echo "")
+            2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin).get('body',''))" 2>/dev/null || echo "")
+          RELEASE_HASH=$(echo "$RELEASE_BODY" | grep -A5 'Compatibility Hash' | grep -oE '[0-9a-f]{64}' | head -1 || echo "")
 
           if [ -n "$RELEASE_HASH" ]; then
             echo "📋 Release hash:  $RELEASE_HASH"
