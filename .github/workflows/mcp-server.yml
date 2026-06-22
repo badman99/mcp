@@ -237,12 +237,12 @@ jobs:
           grep -q "disk.dataPartition.size" "$CONFIG_INI" || echo "disk.dataPartition.size=32768M" >> "$CONFIG_INI"
 
           # 1. Screen resolution 720x1280 (saves ~300-500MB RAM)
-          sed -i 's/hw.lcd.width=.*/hw.lcd.width=720/' "$CONFIG_INI"
-          grep -q "hw.lcd.width" "$CONFIG_INI" || echo "hw.lcd.width=720" >> "$CONFIG_INI"
-          sed -i 's/hw.lcd.height=.*/hw.lcd.height=1280/' "$CONFIG_INI"
-          grep -q "hw.lcd.height" "$CONFIG_INI" || echo "hw.lcd.height=1280" >> "$CONFIG_INI"
-          sed -i 's/hw.lcd.density=.*/hw.lcd.density=320/' "$CONFIG_INI"
-          grep -q "hw.lcd.density" "$CONFIG_INI" || echo "hw.lcd.density=320" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.width=.*/hw.lcd.width=480/' "$CONFIG_INI"
+          grep -q "hw.lcd.width" "$CONFIG_INI" || echo "hw.lcd.width=480" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.height=.*/hw.lcd.height=854/' "$CONFIG_INI"
+          grep -q "hw.lcd.height" "$CONFIG_INI" || echo "hw.lcd.height=854" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.density=.*/hw.lcd.density=240/' "$CONFIG_INI"
+          grep -q "hw.lcd.density" "$CONFIG_INI" || echo "hw.lcd.density=240" >> "$CONFIG_INI"
 
           # 2. Disable unused hardware (saves ~200MB RAM)
           sed -i 's/hw.camera.back=.*/hw.camera.back=none/' "$CONFIG_INI"
@@ -257,7 +257,7 @@ jobs:
           echo "hw.sensor.light=no" >> "$CONFIG_INI"
           echo "hw.sensor.orientation=no" >> "$CONFIG_INI"
 
-          echo "✅ AVD config: 32GB storage, 720p, hardware disabled"
+          echo "✅ AVD config: 32GB storage, 480p, hardware disabled"
 
           echo "📋 Verifying AVD created..."
           avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
