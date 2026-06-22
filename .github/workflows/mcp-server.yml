@@ -241,8 +241,8 @@ jobs:
           grep -q "hw.lcd.width" "$CONFIG_INI" || echo "hw.lcd.width=480" >> "$CONFIG_INI"
           sed -i 's/hw.lcd.height=.*/hw.lcd.height=854/' "$CONFIG_INI"
           grep -q "hw.lcd.height" "$CONFIG_INI" || echo "hw.lcd.height=854" >> "$CONFIG_INI"
-          sed -i 's/hw.lcd.density=.*/hw.lcd.density=240/' "$CONFIG_INI"
-          grep -q "hw.lcd.density" "$CONFIG_INI" || echo "hw.lcd.density=240" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.density=.*/hw.lcd.density=160/' "$CONFIG_INI"
+          grep -q "hw.lcd.density" "$CONFIG_INI" || echo "hw.lcd.density=160" >> "$CONFIG_INI"
 
           # 2. Disable unused hardware (saves ~200MB RAM)
           sed -i 's/hw.camera.back=.*/hw.camera.back=none/' "$CONFIG_INI"
