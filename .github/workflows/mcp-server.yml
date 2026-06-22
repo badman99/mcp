@@ -316,6 +316,14 @@ jobs:
           adb shell settings put global transition_animation_scale 0
           adb shell settings put global animator_duration_scale 0
 
+          echo "🔓 Enabling root access (AOSP default image)..."
+          adb root
+          sleep 2
+          adb shell whoami && echo "✅ Root access confirmed!" || echo "⚠️ Root not available"
+
+          echo "🖥️ Setting up AnyDesk for remote control..."
+          bash scripts/anydesk-setup.sh || echo "⚠️ AnyDesk setup incomplete (non-fatal)"
+
           echo "📲 Starting mobile-mcp via mcp-proxy on :$ANDROID_PORT..."
           mcp-proxy \
             --port $ANDROID_PORT \
