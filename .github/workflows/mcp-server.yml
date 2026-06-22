@@ -3,7 +3,7 @@ name: MCP Server
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, vnc-display]
   # schedule:
   #   - cron: '0 */4 * * *'
 
@@ -16,6 +16,7 @@ env:
   TERMINAL_PORT: 3004
   WEBDAV_PORT: 3005
   ANDROID_PORT: 3006
+  VNC_PORT: 5900
   SCREENSHOTS_DIR: /tmp/storage/screenshots
   UPLOADS_DIR: /tmp/storage/uploads
   PLAYWRIGHT_WORKER: ${{ secrets.PLAYWRIGHT_WORKER }}
@@ -72,6 +73,11 @@ jobs:
           echo "📥 Downloading bore..."
           curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
           tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
+
+          echo "🖥️ Installing Xvfb + x11vnc for VNC display..."
+          sudo apt-get install -y -qq xvfb x11vnc 2>/dev/null || true
+          echo "✅ Xvfb + x11vnc ready!"
+
           echo "✅ All dependencies ready!"
 
       - name: Configure stealth + storage
@@ -265,9 +271,15 @@ jobs:
           echo "📋 Available AVDs:"
           emulator -list-avds
 
-          echo "🤖 Booting Android emulator (KVM accelerated)..."
+          echo "🖥️ Starting Xvfb virtual display (1080x2400x24)..."
+          Xvfb :1 -screen 0 1080x2400x24 > /tmp/xvfb.log 2>&1 &
+          sleep 2
+          export DISPLAY=:1
+          echo "✅ Xvfb running on :1"
+
+          echo "🤖 Booting Android emulator (KVM accelerated, VNC display)..."
           emulator -avd mcp_android \
-            -no-window -no-audio -no-snapshot \
+            -no-audio -no-snapshot \
             -no-snapshot-save -no-snapshot-load \
             -gpu swiftshader_indirect -no-boot-anim \
             -wipe-data -accel auto \
@@ -323,6 +335,17 @@ jobs:
 
           echo "🖥️ Setting up AnyDesk for remote control..."
           bash scripts/anydesk-setup.sh || echo "⚠️ AnyDesk setup incomplete (non-fatal)"
+
+          echo "🔒 Starting x11vnc on port $VNC_PORT (no password)..."
+          x11vnc -display :1 -forever -shared -nopw -rfbport $VNC_PORT \
+            > /tmp/x11vnc.log 2>&1 &
+          sleep 3
+          if nc -z localhost $VNC_PORT 2>/dev/null; then
+            echo "✅ x11vnc ready on :$VNC_PORT!"
+          else
+            echo "⚠️ x11vnc failed to start:"
+            cat /tmp/x11vnc.log
+          fi
 
           echo "📲 Starting mobile-mcp via mcp-proxy on :$ANDROID_PORT..."
           mcp-proxy \
@@ -451,6 +474,21 @@ jobs:
             return 1
           }
 
+          restart_vnc() {
+            echo "🔄 Restarting x11vnc on :$VNC_PORT..."
+            fuser -k $VNC_PORT/tcp 2>/dev/null || true
+            pkill -f "x11vnc" 2>/dev/null || true
+            sleep 1
+            x11vnc -display :1 -forever -shared -nopw -rfbport $VNC_PORT \
+              > /tmp/x11vnc.log 2>&1 &
+            for i in $(seq 1 10); do
+              nc -z localhost $VNC_PORT 2>/dev/null && echo "✅ x11vnc restarted!" && return 0
+              sleep 2
+            done
+            echo "❌ x11vnc restart failed!"
+            return 1
+          }
+
           # ─── Recover existing bore PIDs from previous step ───────
           MCP_BORE_PID=$(pgrep -f "bore local $MCP_PORT" | head -1)
           TERMINAL_BORE_PID=$(pgrep -f "bore local $TERMINAL_PORT" | head -1)
@@ -461,19 +499,34 @@ jobs:
           ANDROID_BORE_PID=${ANDROID_BORE%%:*}
           ANDROID_TUNNEL=${ANDROID_BORE#*:}
 
+          # ─── Start VNC bore tunnel ───────────────────────────────
+          VNC_BORE=$(start_bore $VNC_PORT) || { echo "⚠️ VNC bore failed (non-fatal)"; VNC_BORE=""; }
+          if [ -n "$VNC_BORE" ]; then
+            VNC_BORE_PID=${VNC_BORE%%:*}
+            VNC_TUNNEL=${VNC_BORE#*:}
+          else
+            VNC_BORE_PID=""
+            VNC_TUNNEL="(unavailable)"
+          fi
+
           echo ""
-          echo "╔══════════════════════════════════════════════════╗"
+          echo "╔════════════════════════════════════════════════════════════════╗"
           echo "║  🎭 Playwright: $MCP_BORE_PID"
           echo "║  🖥️ Terminal:   $TERMINAL_BORE_PID"
           echo "║  📂 WebDAV:     $WEBDAV_BORE_PID"
           echo "║  📱 Android:    $ANDROID_TUNNEL"
           echo "║     → $ANDROID_WORKER/sse"
-          echo "╚══════════════════════════════════════════════════╝"
+          echo "║  📺 VNC:        $VNC_TUNNEL"
+          echo "║     → Connect RealVNC app to this address (no password)"
+          echo "╚════════════════════════════════════════════════════════════════╝"
           echo ""
 
-          # ─── Save Android tunnel to Redis ────────────────────────
+          # ─── Save Android + VNC tunnels to Redis ─────────────────
           redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
-          echo "✅ All 4 tunnel URLs saved to Redis!"
+          if [ -n "$VNC_BORE_PID" ]; then
+            redis_set "vnc:TUNNEL_URL" "$VNC_TUNNEL"
+          fi
+          echo "✅ All tunnel URLs saved to Redis!"
 
           # ─── Watchdog Loop ───────────────────────────────────────
           echo "🐶 Watchdog started — monitoring all 4 services every 5 seconds..."
@@ -526,6 +579,16 @@ jobs:
               echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
             fi
 
+            if [ -n "$VNC_BORE_PID" ] && ! nc -z localhost $VNC_PORT 2>/dev/null; then
+              echo "⚠️ $(date) — VNC :$VNC_PORT down! Restarting..."
+              restart_vnc
+              NEW_BORE=$(start_bore $VNC_PORT) || continue
+              VNC_BORE_PID=${NEW_BORE%%:*}
+              VNC_TUNNEL=${NEW_BORE#*:}
+              redis_set "vnc:TUNNEL_URL" "$VNC_TUNNEL"
+              echo "📡 VNC bore reconnected → $VNC_TUNNEL"
+            fi
+
             # --- Bore PID checks: if bore died → reconnect + update Redis ---
             if ! kill -0 $MCP_BORE_PID 2>/dev/null; then
               echo "🔴 $(date) — Bore for :$MCP_PORT died! Reconnecting..."
@@ -561,5 +624,14 @@ jobs:
               ANDROID_TUNNEL=${NEW_BORE#*:}
               redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
               echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
+            fi
+
+            if [ -n "$VNC_BORE_PID" ] && ! kill -0 $VNC_BORE_PID 2>/dev/null; then
+              echo "🔴 $(date) — Bore for :$VNC_PORT died! Reconnecting..."
+              NEW_BORE=$(start_bore $VNC_PORT) || continue
+              VNC_BORE_PID=${NEW_BORE%%:*}
+              VNC_TUNNEL=${NEW_BORE#*:}
+              redis_set "vnc:TUNNEL_URL" "$VNC_TUNNEL"
+              echo "📡 VNC bore reconnected → $VNC_TUNNEL"
             fi
           done
