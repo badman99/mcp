@@ -341,6 +341,10 @@ jobs:
           # Show search results in log
           cat /tmp/snapshot_search.txt 2>/dev/null
 
+          # Parse matched tag and hash from Python output
+          MATCHED_TAG=$(grep '^MATCHED_TAG=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+          MATCHED_HASH=$(grep '^MATCHED_HASH=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+
           if [ -n "$MATCHED_TAG" ]; then
             echo ""
             echo "✅ Hash MATCH with latest release: $MATCHED_TAG"
