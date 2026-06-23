@@ -305,50 +305,38 @@ jobs:
           # Fetch all releases (newest first) and find one with matching hash
           MATCHED_TAG=""
           MATCHED_HASH=""
-          python3 << 'PYEOF' > /tmp/snapshot_search.txt
-import json, urllib.request, os, sys
 
-current_hash = os.environ.get("CURRENT_HASH", "")
-repo = "badman99/mcp"
-
-try:
-    req = urllib.request.Request(
-        f"https://api.github.com/repos/{repo}/releases?per_page=30",
-        headers={"Accept": "application/vnd.github+json"}
-    )
-    resp = urllib.request.urlopen(req)
-    releases = json.loads(resp.read())
-except Exception as e:
-    print(f"ERROR: {e}")
-    sys.exit(0)
-
-print(f"Found {len(releases)} releases. Searching for matching hash...")
-print(f"Looking for hash: {current_hash}")
-
-for r in releases:
-    tag = r.get("tag_name", "")
-    body = r.get("body", "")
-    # Extract hash from "Compatibility Hash" section
-    import re
-    hash_match = re.search(r'Compatibility Hash.*?([0-9a-f]{64})', body, re.DOTALL)
-    release_hash = hash_match.group(1) if hash_match else ""
-
-    if not release_hash:
-        # Try finding any 64-char hex in body
-        hash_match = re.search(r'([0-9a-f]{64})', body)
-        release_hash = hash_match.group(1) if hash_match else ""
-
-    print(f"  {tag}: hash={release_hash[:16]}... {'✅ MATCH' if release_hash == current_hash else '❌ mismatch' if release_hash else '⚠️ no hash'}")
-
-    if release_hash == current_hash:
-        print(f"MATCHED_TAG={tag}")
-        print(f"MATCHED_HASH={release_hash}")
-        break
-PYEOF
-
-          # Parse search results
-          MATCHED_TAG=$(grep '^MATCHED_TAG=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
-          MATCHED_HASH=$(grep '^MATCHED_HASH=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+          python3 -c "
+          import json, urllib.request, os, sys, re
+          current_hash = os.environ.get('CURRENT_HASH', '')
+          repo = 'badman99/mcp'
+          try:
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/releases?per_page=30',
+                  headers={'Accept': 'application/vnd.github+json'}
+              )
+              resp = urllib.request.urlopen(req)
+              releases = json.loads(resp.read())
+          except Exception as e:
+              print(f'ERROR: {e}')
+              sys.exit(0)
+          print(f'Found {len(releases)} releases. Searching for matching hash...')
+          print(f'Looking for hash: {current_hash}')
+          for r in releases:
+              tag = r.get('tag_name', '')
+              body = r.get('body', '')
+              hash_match = re.search(r'Compatibility Hash.*?([0-9a-f]{64})', body, re.DOTALL)
+              release_hash = hash_match.group(1) if hash_match else ''
+              if not release_hash:
+                  hash_match = re.search(r'([0-9a-f]{64})', body)
+                  release_hash = hash_match.group(1) if hash_match else ''
+              status = 'MATCH' if release_hash == current_hash else ('mismatch' if release_hash else 'no hash')
+              print(f'  {tag}: hash={release_hash[:16]}... {status}')
+              if release_hash == current_hash:
+                  print(f'MATCHED_TAG={tag}')
+                  print(f'MATCHED_HASH={release_hash}')
+                  break
+          " > /tmp/snapshot_search.txt 2>&1 || true
 
           # Show search results in log
           cat /tmp/snapshot_search.txt 2>/dev/null
