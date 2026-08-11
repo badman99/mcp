@@ -1,0 +1,837 @@
+name: MCP Server
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  # schedule:
+  #   - cron: '0 */4 * * *'
+
+concurrency:
+  group: gha-server
+  cancel-in-progress: true
+
+env:
+  MCP_PORT: 3002
+  TERMINAL_PORT: 3004
+  WEBDAV_PORT: 3005
+  ANDROID_PORT: 3006
+  SCREENSHOTS_DIR: /tmp/storage/screenshots
+  UPLOADS_DIR: /tmp/storage/uploads
+  PLAYWRIGHT_WORKER: ${{ secrets.PLAYWRIGHT_WORKER }}
+  TERMINAL_WORKER: ${{ secrets.TERMINAL_WORKER }}
+  WEBDAV_WORKER: ${{ secrets.WEBDAV_WORKER }}
+  ANDROID_WORKER: ${{ secrets.ANDROID_WORKER }}
+  AUTH_TOKEN: ${{ secrets.AUTH_TOKEN }}
+
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: |
+          echo "📦 Installing tools..."
+          npm install -g @playwright/mcp@latest
+          npx playwright install-deps chromium
+
+          echo "🥷 Installing CloakBrowser stealth binary..."
+          npm install cloakbrowser playwright-core
+          node --input-type=module -e "import{ensureBinary}from'cloakbrowser';const p=await ensureBinary();console.log('✅ Binary:',p)"
+          CLOAK_PATH=$(find ~/.cloakbrowser -name "chrome" -type f | head -1)
+          if [ -z "$CLOAK_PATH" ]; then
+            echo "❌ CloakBrowser binary not found!"
+            find ~/.cloakbrowser -type f 2>/dev/null || echo "No ~/.cloakbrowser dir"
+            exit 1
+          fi
+          echo "CLOAKBROWSER_PATH=$CLOAK_PATH" >> $GITHUB_ENV
+          echo "✅ CloakBrowser binary: $CLOAK_PATH"
+
+          echo "🔤 Installing fonts for anti-bot canvas hash matching..."
+          sudo apt-get update -qq && sudo apt-get install -y -qq \
+            fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
+            fonts-ipafont-gothic fonts-wqy-zenhei fonts-tlwg-loma-otf 2>/dev/null || true
+
+          echo "🖥️ Installing terminal-mcp-server..."
+          git clone https://github.com/weidwonder/terminal-mcp-server.git /tmp/terminal-mcp
+          cd /tmp/terminal-mcp && npm install && npm run build
+          cd -
+          pip install "mcp-proxy" "mcp<2"
+
+          echo "☁️ Installing rclone..."
+          curl -s https://rclone.org/install.sh | sudo bash
+          echo "✅ rclone $(rclone --version | head -1) ready!"
+
+          echo "📥 Downloading bore..."
+          curl -sL "https://github.com/ekzhang/bore/releases/download/v0.5.1/bore-v0.5.1-x86_64-unknown-linux-musl.tar.gz" -o bore.tar.gz
+          tar -xzf bore.tar.gz && chmod +x bore && sudo mv bore /usr/local/bin/
+          echo "✅ All dependencies ready!"
+
+      - name: Configure stealth + storage
+        run: |
+          mkdir -p $SCREENSHOTS_DIR $UPLOADS_DIR
+          echo "🥷 Injecting CloakBrowser executablePath into config..."
+          jq --arg path "$CLOAKBROWSER_PATH" \
+            '.browser.launchOptions.executablePath = $path' \
+            stealth-config.json > /tmp/stealth-config.json
+          mv /tmp/stealth-config.json stealth-config.json
+          echo "✅ Config updated with binary: $CLOAKBROWSER_PATH"
+          cat stealth-config.json | jq '.browser.launchOptions.executablePath'
+
+      - name: Start Playwright MCP
+        run: |
+          echo "🎭 Starting Playwright MCP (CloakBrowser stealth) on :$MCP_PORT..."
+          PLAYWRIGHT_MCP_BROWSER=chromium PLAYWRIGHT_MCP_HEADLESS=true \
+          npx @playwright/mcp@latest \
+            --config stealth-config.json \
+            --headless \
+            --port $MCP_PORT \
+            --host 0.0.0.0 \
+            --isolated \
+            --no-sandbox \
+            --allowed-origins '*' \
+            --allowed-hosts '*' \
+            --output-dir $SCREENSHOTS_DIR \
+            > /tmp/mcp.log 2>&1 &
+          for i in {1..30}; do
+            nc -z localhost $MCP_PORT 2>/dev/null && echo "✅ MCP ready!" && break
+            [ $i -eq 30 ] && echo "❌ MCP failed!" && cat /tmp/mcp.log && exit 1
+            sleep 2
+          done
+
+      - name: Start Terminal MCP
+        run: |
+          echo "🖥️ Starting terminal MCP on :$TERMINAL_PORT..."
+          mcp-proxy \
+            --port $TERMINAL_PORT \
+            --host 0.0.0.0 \
+            --allow-origin '*' \
+            -- node /tmp/terminal-mcp/build/index.js \
+            > /tmp/terminal.log 2>&1 &
+          sleep 4
+          if nc -z localhost $TERMINAL_PORT; then
+            echo "✅ Terminal MCP ready!"
+          else
+            echo "❌ Terminal MCP failed!"
+            cat /tmp/terminal.log
+            exit 1
+          fi
+
+      - name: Start WebDAV Server
+        run: |
+          echo "📂 Starting rclone WebDAV on :$WEBDAV_PORT (serving /)..."
+          rclone serve webdav / \
+            --addr 0.0.0.0:$WEBDAV_PORT \
+            --allow-origin '*' \
+            --no-checksum \
+            --vfs-links \
+            --vfs-cache-mode full \
+            --dir-cache-time 10s \
+            > /tmp/webdav.log 2>&1 &
+          sleep 3
+          nc -z localhost $WEBDAV_PORT \
+            && echo "✅ WebDAV ready!" \
+            || (echo "⚠️ WebDAV issue:" && cat /tmp/webdav.log)
+
+      - name: Start Tunnels (Playwright + Terminal + WebDAV)
+        run: |
+          REDIS_URL="${{ secrets.REDIS_URL }}"
+          REDIS_TOKEN="${{ secrets.REDIS_TOKEN }}"
+
+          redis_set() {
+            local key="$1"
+            local value="$2"
+            curl -sf -X POST "${REDIS_URL}" \
+              -H "Authorization: Bearer ${REDIS_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1
+          }
+
+          start_bore() {
+            local port="$1"
+            local log="/tmp/bore-${port}.log"
+            rm -f "$log"
+            bore local $port --to bore.pub > "$log" 2>&1 &
+            local pid=$!
+            sleep 5
+            local url=$(grep -oE 'bore\.pub:[0-9]+' "$log" | head -1)
+            if [ -z "$url" ]; then
+              echo "❌ bore.pub URL not found for port $port!"
+              cat "$log"
+              return 1
+            fi
+            echo "::add-mask::http://$url" >&2
+            echo "$pid:http://$url"
+          }
+
+          # ─── Start 3 bore tunnels ────────────────────────────────
+          MCP_BORE=$(start_bore $MCP_PORT) || exit 1
+          MCP_BORE_PID=${MCP_BORE%%:*}
+          MCP_TUNNEL=${MCP_BORE#*:}
+
+          TERMINAL_BORE=$(start_bore $TERMINAL_PORT) || exit 1
+          TERMINAL_BORE_PID=${TERMINAL_BORE%%:*}
+          TERMINAL_TUNNEL=${TERMINAL_BORE#*:}
+
+          WEBDAV_BORE=$(start_bore $WEBDAV_PORT) || exit 1
+          WEBDAV_BORE_PID=${WEBDAV_BORE%%:*}
+          WEBDAV_TUNNEL=${WEBDAV_BORE#*:}
+
+          echo ""
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║  🎭 Playwright: $MCP_TUNNEL"
+          echo "║     → $PLAYWRIGHT_WORKER/sse"
+          echo "║  🖥️ Terminal:   $TERMINAL_TUNNEL"
+          echo "║     → $TERMINAL_WORKER/sse"
+          echo "║  📂 WebDAV:    $WEBDAV_TUNNEL"
+          echo "║     → $WEBDAV_WORKER/"
+          echo "║  📱 Android:    pending (booting...)"
+          echo "╚══════════════════════════════════════════════════╝"
+          echo ""
+
+          # ─── Save 3 tunnels to Redis ─────────────────────────────
+          redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
+          redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
+          redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
+          echo "✅ 3 tunnel URLs saved to Redis! Playwright/Terminal/WebDAV are LIVE!"
+
+      - name: Boot Android Emulator + Mobile MCP
+        run: |
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export ANDROID_AVD_HOME=$HOME/.android/avd
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
+
+          echo "📱 Installing mobile-mcp..."
+          npm install -g @mobilenext/mobile-mcp@latest
+
+          echo "🔧 Enabling KVM hardware acceleration..."
+          sudo chown -R $USER /dev/kvm 2>/dev/null || true
+          if [ -e /dev/kvm ]; then
+            echo "✅ /dev/kvm exists"
+          else
+            echo "⚠️ /dev/kvm not found — using software rendering"
+          fi
+
+          echo "📦 Installing Android system image..."
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "emulator" "system-images;android-31;default;x86_64"
+          echo "✅ System image installed"
+
+          echo "🏗️ Creating AVD..."
+          mkdir -p $ANDROID_AVD_HOME
+          echo "no" | avdmanager create avd -n mcp_android -k "system-images;android-31;default;x86_64" --device "pixel_6" --force
+
+          echo "⚙️ Configuring AVD: 32GB storage + 720p + hardware disable..."
+          CONFIG_INI="$ANDROID_AVD_HOME/mcp_android.avd/config.ini"
+
+          # 32GB storage
+          sed -i 's/disk.dataPartition.size=.*/disk.dataPartition.size=32768M/' "$CONFIG_INI"
+          grep -q "disk.dataPartition.size" "$CONFIG_INI" || echo "disk.dataPartition.size=32768M" >> "$CONFIG_INI"
+
+          # 1. Screen resolution original pixel_6 (1080x2400, 480dpi)
+          sed -i 's/hw.lcd.width=.*/hw.lcd.width=1080/' "$CONFIG_INI"
+          grep -q "hw.lcd.width" "$CONFIG_INI" || echo "hw.lcd.width=1080" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.height=.*/hw.lcd.height=2400/' "$CONFIG_INI"
+          grep -q "hw.lcd.height" "$CONFIG_INI" || echo "hw.lcd.height=2400" >> "$CONFIG_INI"
+          sed -i 's/hw.lcd.density=.*/hw.lcd.density=480/' "$CONFIG_INI"
+          grep -q "hw.lcd.density" "$CONFIG_INI" || echo "hw.lcd.density=480" >> "$CONFIG_INI"
+
+          # 2. Disable unused hardware (saves ~200MB RAM)
+          sed -i 's/hw.camera.back=.*/hw.camera.back=none/' "$CONFIG_INI"
+          grep -q "hw.camera.back" "$CONFIG_INI" || echo "hw.camera.back=none" >> "$CONFIG_INI"
+          sed -i 's/hw.camera.front=.*/hw.camera.front=none/' "$CONFIG_INI"
+          grep -q "hw.camera.front" "$CONFIG_INI" || echo "hw.camera.front=none" >> "$CONFIG_INI"
+          sed -i 's/hw.gps=.*/hw.gps=no/' "$CONFIG_INI"
+          grep -q "hw.gps" "$CONFIG_INI" || echo "hw.gps=no" >> "$CONFIG_INI"
+          echo "hw.sensor.gyroscope=no" >> "$CONFIG_INI"
+          echo "hw.sensor.accelerometer=no" >> "$CONFIG_INI"
+          echo "hw.sensor.proximity=no" >> "$CONFIG_INI"
+          echo "hw.sensor.light=no" >> "$CONFIG_INI"
+          echo "hw.sensor.orientation=no" >> "$CONFIG_INI"
+
+          echo "✅ AVD config: 32GB storage, original pixel_6 display, hardware disabled"
+
+          # ─── Compatibility Hash Generation ──────────────────────
+          # Hash is generated from BREAKING settings only (must match snapshot)
+          # Safe-to-change settings (display, RAM, CPU, sensors) are NOT included
+          echo "🔐 Generating compatibility hash from breaking settings..."
+
+          AVD_DIR="$ANDROID_AVD_HOME/mcp_android.avd"
+          CONFIG_INI="$AVD_DIR/config.ini"
+
+          # Extract breaking settings from config.ini
+          SNAPSHOT_ANDROID_API=$(grep 'image.sysdir.1' "$CONFIG_INI" | grep -oE 'android-[0-9]+' | head -1)
+          SNAPSHOT_IMAGE_TYPE=$(grep 'tag.id=' "$CONFIG_INI" | cut -d= -f2)
+          SNAPSHOT_DEVICE=$(grep 'hw.device.name=' "$CONFIG_INI" | cut -d= -f2)
+          SNAPSHOT_STORAGE=$(grep 'disk.dataPartition.size=' "$CONFIG_INI" | cut -d= -f2)
+          SNAPSHOT_CPU_ARCH=$(grep 'abi.type=' "$CONFIG_INI" | cut -d= -f2)
+          SNAPSHOT_FS=$(grep 'hw.useext4=' "$CONFIG_INI" | cut -d= -f2)
+
+          HASH_INPUT="${SNAPSHOT_ANDROID_API}|${SNAPSHOT_IMAGE_TYPE}|${SNAPSHOT_DEVICE}|${SNAPSHOT_STORAGE}|${SNAPSHOT_CPU_ARCH}|${SNAPSHOT_FS}"
+          CURRENT_HASH=$(echo -n "$HASH_INPUT" | sha256sum | cut -d' ' -f1)
+          export CURRENT_HASH
+
+          echo ""
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║  🔐 Compatibility Hash (breaking settings)       ║"
+          echo "║  Android API:  $SNAPSHOT_ANDROID_API"
+          echo "║  Image type:    $SNAPSHOT_IMAGE_TYPE"
+          echo "║  Device:        $SNAPSHOT_DEVICE"
+          echo "║  Storage:       $SNAPSHOT_STORAGE"
+          echo "║  CPU arch:      $SNAPSHOT_CPU_ARCH"
+          echo "║  Filesystem:    $SNAPSHOT_FS"
+          echo "║  Hash: $CURRENT_HASH"
+          echo "╚══════════════════════════════════════════════════╝"
+          echo ""
+
+          # ─── Snapshot Restore with Hash Verification ──────────────
+          # Find LATEST release whose hash matches current config
+          # If multiple releases have same hash, newest one wins
+          SNAPSHOT_RESTORED=0
+          SNAPSHOT_DIR="/tmp/storage/snapshot"
+          mkdir -p "$SNAPSHOT_DIR"
+
+          echo "📥 Searching for compatible snapshot release..."
+          echo "📋 Current hash: $CURRENT_HASH"
+
+          # Fetch all releases (newest first) and find one with matching hash
+          MATCHED_TAG=""
+          MATCHED_HASH=""
+
+          python3 -c "
+          import json, urllib.request, os, sys, re
+          current_hash = os.environ.get('CURRENT_HASH', '')
+          repo = 'badman99/mcp'
+          try:
+              req = urllib.request.Request(
+                  f'https://api.github.com/repos/{repo}/releases?per_page=30',
+                  headers={'Accept': 'application/vnd.github+json'}
+              )
+              resp = urllib.request.urlopen(req)
+              releases = json.loads(resp.read())
+          except Exception as e:
+              print(f'ERROR: {e}')
+              sys.exit(0)
+          print(f'Found {len(releases)} releases. Searching for matching hash...')
+          print(f'Looking for hash: {current_hash}')
+          for r in releases:
+              tag = r.get('tag_name', '')
+              body = r.get('body', '')
+              hash_match = re.search(r'Compatibility Hash.*?([0-9a-f]{64})', body, re.DOTALL)
+              release_hash = hash_match.group(1) if hash_match else ''
+              if not release_hash:
+                  hash_match = re.search(r'([0-9a-f]{64})', body)
+                  release_hash = hash_match.group(1) if hash_match else ''
+              status = 'MATCH' if release_hash == current_hash else ('mismatch' if release_hash else 'no hash')
+              print(f'  {tag}: hash={release_hash[:16]}... {status}')
+              if release_hash == current_hash:
+                  print(f'MATCHED_TAG={tag}')
+                  print(f'MATCHED_HASH={release_hash}')
+                  break
+          " > /tmp/snapshot_search.txt 2>&1 || true
+
+          # Show search results in log
+          cat /tmp/snapshot_search.txt 2>/dev/null
+
+          # Parse matched tag and hash from Python output
+          MATCHED_TAG=$(grep '^MATCHED_TAG=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+          MATCHED_HASH=$(grep '^MATCHED_HASH=' /tmp/snapshot_search.txt 2>/dev/null | cut -d= -f2 || echo "")
+
+          if [ -n "$MATCHED_TAG" ]; then
+            echo ""
+            echo "✅ Hash MATCH with latest release: $MATCHED_TAG"
+            echo "📋 Release hash:  $MATCHED_HASH"
+            echo "📋 Current hash:  $CURRENT_HASH"
+
+            # Download from matched release
+            wget -q --timeout=120 "https://github.com/badman99/mcp/releases/download/${MATCHED_TAG}/full-snapshot.qcow2" -O "$SNAPSHOT_DIR/full-snapshot.qcow2" 2>/dev/null && {
+              wget -q --timeout=120 "https://github.com/badman99/mcp/releases/download/${MATCHED_TAG}/encryptionkey-snapshot.qcow2" -O "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || true
+
+              if [ -f "$SNAPSHOT_DIR/full-snapshot.qcow2" ] && [ -s "$SNAPSHOT_DIR/full-snapshot.qcow2" ]; then
+                echo "✅ Snapshot downloaded from $MATCHED_TAG! Restoring..."
+
+                # Convert qcow2 → raw and replace userdata
+                $ANDROID_SDK_ROOT/emulator/qemu-img convert -O raw "$SNAPSHOT_DIR/full-snapshot.qcow2" "$AVD_DIR/userdata-qemu.img"
+                rm -f "$AVD_DIR/userdata-qemu.img.qcow2"
+
+                # Restore encryption key
+                if [ -f "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" ] && [ -s "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" ]; then
+                  $ANDROID_SDK_ROOT/emulator/qemu-img convert -O raw "$SNAPSHOT_DIR/encryptionkey-snapshot.qcow2" "$AVD_DIR/encryptionkey.img"
+                  rm -f "$AVD_DIR/encryptionkey.img.qcow2"
+                  echo "✅ Encryption key restored!"
+                fi
+
+                SNAPSHOT_RESTORED=1
+                echo "✅ Snapshot restore complete! Source: $MATCHED_TAG"
+              else
+                echo "⚠️ Snapshot download failed or empty — will boot fresh"
+              fi
+            } || {
+              echo "⚠️ Snapshot download failed — will boot fresh (AnyDesk setup will run)"
+            }
+          else
+            echo ""
+            echo "❌ No compatible release found!"
+            echo "⚠️ No release has matching hash — will boot fresh"
+            echo "⚠️ AnyDesk setup will run on this boot"
+          fi
+
+          echo "📋 Verifying AVD created..."
+          avdmanager list avd 2>&1 | grep -i mcp_android && echo "✅ AVD mcp_android exists" || { echo "❌ AVD creation failed!"; avdmanager list avd; exit 1; }
+
+          echo "📋 Available AVDs:"
+          emulator -list-avds
+
+          echo "🤖 Booting Android emulator (KVM accelerated)..."
+          BOOT_FLAGS="-no-window -no-audio -no-snapshot -no-snapshot-save -no-snapshot-load -gpu swiftshader_indirect -no-boot-anim -accel auto -netdelay none -netspeed full -memory 8192 -cores 4"
+          if [ "$SNAPSHOT_RESTORED" = "1" ]; then
+            echo "📦 Booting from snapshot (no -wipe-data)..."
+            emulator -avd mcp_android $BOOT_FLAGS > /tmp/emulator.log 2>&1 &
+          else
+            echo "📦 Booting fresh (with -wipe-data)..."
+            emulator -avd mcp_android -wipe-data $BOOT_FLAGS > /tmp/emulator.log 2>&1 &
+          fi
+          EMU_PID=$!
+          echo "Emulator PID: $EMU_PID"
+
+          echo "⏳ Waiting for device to come online (max 180s)..."
+          BOOT_OK=0
+          for i in $(seq 1 90); do
+            if ! kill -0 $EMU_PID 2>/dev/null; then
+              echo "❌ Emulator process died! Last logs:"
+              tail -80 /tmp/emulator.log
+              exit 1
+            fi
+
+            ADB_OUT=$(timeout 5 adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r\n')
+            if [ "$ADB_OUT" = "1" ]; then
+              echo "✅ Emulator booted after $((i*2))s!"
+              BOOT_OK=1
+              break
+            fi
+
+            if [ $((i % 10)) -eq 0 ]; then
+              echo "   ...still booting (${i}*2)s, adb says: '$ADB_OUT'"
+              tail -3 /tmp/emulator.log 2>/dev/null || true
+            fi
+            sleep 2
+          done
+
+          if [ $BOOT_OK -eq 0 ]; then
+            echo "❌ Emulator failed to boot in 180s!"
+            echo "=== Emulator log (last 100 lines) ==="
+            tail -100 /tmp/emulator.log
+            echo "=== ADB devices ==="
+            adb devices -l 2>/dev/null || true
+            echo "=== Process check ==="
+            kill -0 $EMU_PID 2>/dev/null && echo "Emulator process alive" || echo "Emulator process dead"
+            exit 1
+          fi
+
+          echo "📱 Disabling emulator animations for speed..."
+          adb shell settings put global window_animation_scale 0
+          adb shell settings put global transition_animation_scale 0
+          adb shell settings put global animator_duration_scale 0
+
+          echo "🔓 Enabling root access (AOSP default image)..."
+          adb root
+          sleep 2
+          adb shell whoami && echo "✅ Root access confirmed!" || echo "⚠️ Root not available"
+
+          if [ "$SNAPSHOT_RESTORED" = "1" ]; then
+            echo "✅ AnyDesk already installed from snapshot — skipping setup"
+          else
+            echo "🖥️ Setting up AnyDesk for remote control..."
+            bash scripts/anydesk-setup.sh || echo "⚠️ AnyDesk setup incomplete (non-fatal)"
+          fi
+
+          echo "📲 Starting mobile-mcp via mcp-proxy on :$ANDROID_PORT..."
+          mcp-proxy \
+            --port $ANDROID_PORT \
+            --host 0.0.0.0 \
+            -- npx @mobilenext/mobile-mcp@latest \
+            > /tmp/android-mcp.log 2>&1 &
+
+          for i in $(seq 1 30); do
+            nc -z localhost $ANDROID_PORT 2>/dev/null && echo "✅ Android MCP ready!" && break
+            [ $i -eq 30 ] && echo "❌ Android MCP failed!" && cat /tmp/android-mcp.log && exit 1
+            sleep 2
+          done
+
+      - name: Start Android Tunnel + Watchdog
+        run: |
+          REDIS_URL="${{ secrets.REDIS_URL }}"
+          REDIS_TOKEN="${{ secrets.REDIS_TOKEN }}"
+
+          redis_set() {
+            local key="$1"
+            local value="$2"
+            curl -sf -X POST "${REDIS_URL}" \
+              -H "Authorization: Bearer ${REDIS_TOKEN}" \
+              -H "Content-Type: application/json" \
+              -d "[\"SET\",\"${key}\",\"${value}\"]" > /dev/null 2>&1
+          }
+
+          start_bore() {
+            local port="$1"
+            local log="/tmp/bore-${port}.log"
+            rm -f "$log"
+            bore local $port --to bore.pub > "$log" 2>&1 &
+            local pid=$!
+            sleep 5
+            local url=$(grep -oE 'bore\.pub:[0-9]+' "$log" | head -1)
+            if [ -z "$url" ]; then
+              echo "❌ bore.pub URL not found for port $port!"
+              cat "$log"
+              return 1
+            fi
+            echo "::add-mask::http://$url" >&2
+            echo "$pid:http://$url"
+          }
+
+          restart_mcp() {
+            echo "🔄 Restarting MCP on :$MCP_PORT..."
+            fuser -k $MCP_PORT/tcp 2>/dev/null || true
+            sleep 1
+            PLAYWRIGHT_MCP_BROWSER=chromium PLAYWRIGHT_MCP_HEADLESS=true \
+            npx @playwright/mcp@latest \
+              --config stealth-config.json \
+              --headless \
+              --port $MCP_PORT \
+              --host 0.0.0.0 \
+              --isolated \
+              --no-sandbox \
+              --allowed-origins '*' \
+              --allowed-hosts '*' \
+              --output-dir $SCREENSHOTS_DIR \
+              > /tmp/mcp.log 2>&1 &
+            for i in $(seq 1 15); do
+              nc -z localhost $MCP_PORT 2>/dev/null && echo "✅ MCP restarted!" && return 0
+              sleep 2
+            done
+            echo "❌ MCP restart failed!"
+            return 1
+          }
+
+          restart_terminal() {
+            echo "🔄 Restarting Terminal on :$TERMINAL_PORT..."
+            fuser -k $TERMINAL_PORT/tcp 2>/dev/null || true
+            sleep 1
+            mcp-proxy \
+              --port $TERMINAL_PORT \
+              --host 0.0.0.0 \
+              --allow-origin '*' \
+              -- node /tmp/terminal-mcp/build/index.js \
+              > /tmp/terminal.log 2>&1 &
+            for i in $(seq 1 10); do
+              nc -z localhost $TERMINAL_PORT 2>/dev/null && echo "✅ Terminal restarted!" && return 0
+              sleep 2
+            done
+            echo "❌ Terminal restart failed!"
+            return 1
+          }
+
+          restart_webdav() {
+            echo "🔄 Restarting WebDAV on :$WEBDAV_PORT..."
+            fuser -k $WEBDAV_PORT/tcp 2>/dev/null || true
+            sleep 1
+            rclone serve webdav / \
+              --addr 0.0.0.0:$WEBDAV_PORT \
+              --allow-origin '*' \
+              --no-checksum \
+              --vfs-links \
+              --vfs-cache-mode full \
+              --dir-cache-time 10s \
+              > /tmp/webdav.log 2>&1 &
+            for i in $(seq 1 10); do
+              nc -z localhost $WEBDAV_PORT 2>/dev/null && echo "✅ WebDAV restarted!" && return 0
+              sleep 2
+            done
+            echo "❌ WebDAV restart failed!"
+            return 1
+          }
+
+          restart_android() {
+            echo "🔄 Restarting Android MCP on :$ANDROID_PORT..."
+            fuser -k $ANDROID_PORT/tcp 2>/dev/null || true
+            pkill -f "mobile-mcp" 2>/dev/null || true
+            sleep 2
+            export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+            export ANDROID_HOME=$ANDROID_SDK_ROOT
+            export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools
+            mcp-proxy \
+              --port $ANDROID_PORT \
+              --host 0.0.0.0 \
+              -- npx @mobilenext/mobile-mcp@latest \
+              > /tmp/android-mcp.log 2>&1 &
+            for i in $(seq 1 15); do
+              nc -z localhost $ANDROID_PORT 2>/dev/null && echo "✅ Android MCP restarted!" && return 0
+              sleep 2
+            done
+            echo "❌ Android MCP restart failed!"
+            return 1
+          }
+
+          # ─── Recover existing bore PIDs from previous step ───────
+          MCP_BORE_PID=$(pgrep -f "bore local $MCP_PORT" | head -1)
+          TERMINAL_BORE_PID=$(pgrep -f "bore local $TERMINAL_PORT" | head -1)
+          WEBDAV_BORE_PID=$(pgrep -f "bore local $WEBDAV_PORT" | head -1)
+
+          # ─── Start Android bore tunnel ───────────────────────────
+          ANDROID_BORE=$(start_bore $ANDROID_PORT) || exit 1
+          ANDROID_BORE_PID=${ANDROID_BORE%%:*}
+          ANDROID_TUNNEL=${ANDROID_BORE#*:}
+
+          echo ""
+          echo "╔══════════════════════════════════════════════════╗"
+          echo "║  🎭 Playwright: $MCP_BORE_PID"
+          echo "║  🖥️ Terminal:   $TERMINAL_BORE_PID"
+          echo "║  📂 WebDAV:     $WEBDAV_BORE_PID"
+          echo "║  📱 Android:    $ANDROID_TUNNEL"
+          echo "║     → $ANDROID_WORKER/sse"
+          echo "╚══════════════════════════════════════════════════╝"
+          echo ""
+
+          # ─── Save Android tunnel to Redis ────────────────────────
+          redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
+          echo "✅ All 4 tunnel URLs saved to Redis!"
+
+          # ─── Watchdog Loop ───────────────────────────────────────
+          echo "🐶 Watchdog started — monitoring all 4 services every 5 seconds..."
+          echo "⏰ Auto-snapshot will trigger after 310 minutes (5h 10m)..."
+
+          START_TIME=$(date +%s)
+          SNAPSHOT_TAKEN=0
+          SNAPSHOT_TRIGGER_SEC=$((310 * 60))  # 5 hours 10 minutes
+
+          while true; do
+            sleep 5
+
+            # ─── Auto-snapshot timer ──────────────────────────────
+            ELAPSED=$(( $(date +%s) - START_TIME ))
+            if [ "$SNAPSHOT_TAKEN" = "0" ] && [ $ELAPSED -ge $SNAPSHOT_TRIGGER_SEC ]; then
+              echo ""
+              echo "📸 ═════════════════════════════════════════════"
+              echo "📸 Auto-snapshot triggered! (${ELAPSED}s elapsed)"
+              echo "📸 ═════════════════════════════════════════════"
+
+              export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+              QEMU=$ANDROID_SDK_ROOT/emulator/qemu-img
+              AVD_DIR="$HOME/.android/avd/mcp_android.avd"
+              SNAP_DIR="/tmp/storage/auto-snapshot"
+              mkdir -p "$SNAP_DIR"
+
+              # 1. Flush data to disk
+              echo "📸 Flushing data to disk..."
+              adb shell sync 2>/dev/null || true
+              adb shell stop 2>/dev/null || true
+              sleep 3
+              adb shell sync 2>/dev/null || true
+
+              # 2. Create 3 snapshot files
+              echo "📸 Creating snapshot files..."
+              $QEMU convert -U -O qcow2 "$AVD_DIR/userdata-qemu.img.qcow2" "$SNAP_DIR/full-snapshot.qcow2" 2>/dev/null || true
+              $QEMU convert -U -O qcow2 "$AVD_DIR/encryptionkey.img.qcow2" "$SNAP_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || true
+              cp "$AVD_DIR/config.ini" "$SNAP_DIR/config.ini" 2>/dev/null || true
+
+              # 3. Generate hash from config.ini
+              CONFIG_INI="$SNAP_DIR/config.ini"
+              if [ -f "$CONFIG_INI" ]; then
+                SNAP_API=$(grep 'image.sysdir.1' "$CONFIG_INI" | grep -oE 'android-[0-9]+' | head -1)
+                SNAP_IMG=$(grep 'tag.id=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_DEV=$(grep 'hw.device.name=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_STO=$(grep 'disk.dataPartition.size=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_ARCH=$(grep 'abi.type=' "$CONFIG_INI" | cut -d= -f2)
+                SNAP_FS=$(grep 'hw.useext4=' "$CONFIG_INI" | cut -d= -f2)
+                HASH_INPUT="${SNAP_API}|${SNAP_IMG}|${SNAP_DEV}|${SNAP_STO}|${SNAP_ARCH}|${SNAP_FS}"
+                SNAP_HASH=$(echo -n "$HASH_INPUT" | sha256sum | cut -d' ' -f1)
+                echo "$SNAP_HASH" > "$SNAP_DIR/snapshot.hash"
+                echo "📸 Hash: $SNAP_HASH"
+              fi
+
+              # 4. Zip all 4 files (3 snapshots + hash)
+              echo "📸 Zipping snapshot..."
+              cd "$SNAP_DIR"
+              zip -j /tmp/storage/android-snapshot.zip \
+                full-snapshot.qcow2 \
+                encryptionkey-snapshot.qcow2 \
+                config.ini \
+                snapshot.hash 2>/dev/null || {
+                  # If zip fails, try without one file
+                  zip -j /tmp/storage/android-snapshot.zip \
+                    full-snapshot.qcow2 \
+                    encryptionkey-snapshot.qcow2 \
+                    config.ini 2>/dev/null || true
+                }
+              cd -
+
+              ZIP_SIZE=$(du -sh /tmp/storage/android-snapshot.zip 2>/dev/null | cut -f1)
+              echo "📸 Snapshot zip created: $ZIP_SIZE"
+              echo "📸 Path: /tmp/storage/android-snapshot.zip"
+              echo "📸 ═════════════════════════════════════════════"
+              echo ""
+
+              SNAPSHOT_TAKEN=1
+
+              # Break out of watchdog loop — post steps will handle artifact upload
+              echo "📸 Snapshot done! Breaking watchdog loop for artifact upload..."
+              break
+            fi
+
+            # --- Port checks: if port dead → kill old bore, restart service + reconnect bore ---
+            if ! nc -z localhost $MCP_PORT 2>/dev/null; then
+              echo "⚠️ $(date) — MCP :$MCP_PORT down! Restarting..."
+              kill $MCP_BORE_PID 2>/dev/null || true
+              restart_mcp
+              NEW_BORE=$(start_bore $MCP_PORT) || continue
+              MCP_BORE_PID=${NEW_BORE%%:*}
+              MCP_TUNNEL=${NEW_BORE#*:}
+              redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
+              echo "📡 MCP bore reconnected → $MCP_TUNNEL"
+            fi
+
+            if ! nc -z localhost $TERMINAL_PORT 2>/dev/null; then
+              echo "⚠️ $(date) — Terminal :$TERMINAL_PORT down! Restarting..."
+              kill $TERMINAL_BORE_PID 2>/dev/null || true
+              restart_terminal
+              NEW_BORE=$(start_bore $TERMINAL_PORT) || continue
+              TERMINAL_BORE_PID=${NEW_BORE%%:*}
+              TERMINAL_TUNNEL=${NEW_BORE#*:}
+              redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
+              echo "📡 Terminal bore reconnected → $TERMINAL_TUNNEL"
+            fi
+
+            if ! nc -z localhost $WEBDAV_PORT 2>/dev/null; then
+              echo "⚠️ $(date) — WebDAV :$WEBDAV_PORT down! Restarting..."
+              kill $WEBDAV_BORE_PID 2>/dev/null || true
+              restart_webdav
+              NEW_BORE=$(start_bore $WEBDAV_PORT) || continue
+              WEBDAV_BORE_PID=${NEW_BORE%%:*}
+              WEBDAV_TUNNEL=${NEW_BORE#*:}
+              redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
+              echo "📡 WebDAV bore reconnected → $WEBDAV_TUNNEL"
+            fi
+
+            if ! nc -z localhost $ANDROID_PORT 2>/dev/null; then
+              echo "⚠️ $(date) — Android MCP :$ANDROID_PORT down! Restarting..."
+              kill $ANDROID_BORE_PID 2>/dev/null || true
+              restart_android
+              NEW_BORE=$(start_bore $ANDROID_PORT) || continue
+              ANDROID_BORE_PID=${NEW_BORE%%:*}
+              ANDROID_TUNNEL=${NEW_BORE#*:}
+              redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
+              echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
+            fi
+
+            # --- Bore PID checks: if bore died → reconnect + update Redis ---
+            if ! kill -0 $MCP_BORE_PID 2>/dev/null; then
+              echo "🔴 $(date) — Bore for :$MCP_PORT died! Reconnecting..."
+              NEW_BORE=$(start_bore $MCP_PORT) || continue
+              MCP_BORE_PID=${NEW_BORE%%:*}
+              MCP_TUNNEL=${NEW_BORE#*:}
+              redis_set "pw:TUNNEL_URL" "$MCP_TUNNEL"
+              echo "📡 MCP bore reconnected → $MCP_TUNNEL"
+            fi
+
+            if ! kill -0 $TERMINAL_BORE_PID 2>/dev/null; then
+              echo "🔴 $(date) — Bore for :$TERMINAL_PORT died! Reconnecting..."
+              NEW_BORE=$(start_bore $TERMINAL_PORT) || continue
+              TERMINAL_BORE_PID=${NEW_BORE%%:*}
+              TERMINAL_TUNNEL=${NEW_BORE#*:}
+              redis_set "tm:TUNNEL_URL" "$TERMINAL_TUNNEL"
+              echo "📡 Terminal bore reconnected → $TERMINAL_TUNNEL"
+            fi
+
+            if ! kill -0 $WEBDAV_BORE_PID 2>/dev/null; then
+              echo "🔴 $(date) — Bore for :$WEBDAV_PORT died! Reconnecting..."
+              NEW_BORE=$(start_bore $WEBDAV_PORT) || continue
+              WEBDAV_BORE_PID=${NEW_BORE%%:*}
+              WEBDAV_TUNNEL=${NEW_BORE#*:}
+              redis_set "wd:TUNNEL_URL" "$WEBDAV_TUNNEL"
+              echo "📡 WebDAV bore reconnected → $WEBDAV_TUNNEL"
+            fi
+
+            if ! kill -0 $ANDROID_BORE_PID 2>/dev/null; then
+              echo "🔴 $(date) — Bore for :$ANDROID_PORT died! Reconnecting..."
+              NEW_BORE=$(start_bore $ANDROID_PORT) || continue
+              ANDROID_BORE_PID=${NEW_BORE%%:*}
+              ANDROID_TUNNEL=${NEW_BORE#*:}
+              redis_set "an:TUNNEL_URL" "$ANDROID_TUNNEL"
+              echo "📡 Android bore reconnected → $ANDROID_TUNNEL"
+            fi
+          done
+
+      - name: Create Final Snapshot (if not already taken)
+        if: always()
+        run: |
+          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
+          export ANDROID_HOME=$ANDROID_SDK_ROOT
+          export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator
+          QEMU=$ANDROID_SDK_ROOT/emulator/qemu-img
+          AVD_DIR="$HOME/.android/avd/mcp_android.avd"
+          SNAP_DIR="/tmp/storage/auto-snapshot"
+          mkdir -p "$SNAP_DIR"
+
+          # Check if auto-snapshot already taken
+          if [ -f /tmp/storage/android-snapshot.zip ]; then
+            echo "✅ Auto-snapshot already exists, skipping..."
+            ls -lh /tmp/storage/android-snapshot.zip
+            exit 0
+          fi
+
+          echo "📸 Creating final snapshot..."
+
+          # 1. Flush data
+          adb shell sync 2>/dev/null || true
+          adb shell stop 2>/dev/null || true
+          sleep 3
+          adb shell sync 2>/dev/null || true
+
+          # 2. Create 3 snapshot files
+          $QEMU convert -U -O qcow2 "$AVD_DIR/userdata-qemu.img.qcow2" "$SNAP_DIR/full-snapshot.qcow2" 2>/dev/null || echo "⚠️ userdata convert failed"
+          $QEMU convert -U -O qcow2 "$AVD_DIR/encryptionkey.img.qcow2" "$SNAP_DIR/encryptionkey-snapshot.qcow2" 2>/dev/null || echo "⚠️ encryptionkey convert failed"
+          cp "$AVD_DIR/config.ini" "$SNAP_DIR/config.ini" 2>/dev/null || echo "⚠️ config.ini copy failed"
+
+          # 3. Generate hash
+          CONFIG_INI="$SNAP_DIR/config.ini"
+          if [ -f "$CONFIG_INI" ]; then
+            SNAP_API=$(grep 'image.sysdir.1' "$CONFIG_INI" | grep -oE 'android-[0-9]+' | head -1)
+            SNAP_IMG=$(grep 'tag.id=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_DEV=$(grep 'hw.device.name=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_STO=$(grep 'disk.dataPartition.size=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_ARCH=$(grep 'abi.type=' "$CONFIG_INI" | cut -d= -f2)
+            SNAP_FS=$(grep 'hw.useext4=' "$CONFIG_INI" | cut -d= -f2)
+            HASH_INPUT="${SNAP_API}|${SNAP_IMG}|${SNAP_DEV}|${SNAP_STO}|${SNAP_ARCH}|${SNAP_FS}"
+            SNAP_HASH=$(echo -n "$HASH_INPUT" | sha256sum | cut -d' ' -f1)
+            echo "$SNAP_HASH" > "$SNAP_DIR/snapshot.hash"
+            echo "🔐 Hash: $SNAP_HASH"
+          fi
+
+          # 4. Zip
+          cd "$SNAP_DIR"
+          zip -j /tmp/storage/android-snapshot.zip \
+            full-snapshot.qcow2 \
+            encryptionkey-snapshot.qcow2 \
+            config.ini \
+            snapshot.hash 2>/dev/null || true
+          cd -
+
+          echo "✅ Final snapshot created:"
+          ls -lh /tmp/storage/android-snapshot.zip 2>/dev/null || echo "⚠️ No snapshot zip created"
+
+      - name: Upload Snapshot Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-snapshot-${{ github.run_id }}
+          path: /tmp/storage/android-snapshot.zip
+          retention-days: 90
+          compression-level: 0
