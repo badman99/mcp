@@ -1,4 +1,4 @@
-# MCP Server — GitHub Actions
+# MCP Server — GitHub Action
 
 🎯 A **remote automation suite for CI/CD, AI code testing and application testing** — exposes a headless browser, a persistent Ubuntu terminal, an Android emulator and a WebDAV file system running on GitHub Actions, reachable from any MCP-compatible AI client (OpenCode, Claude, Cursor, etc.).
 
