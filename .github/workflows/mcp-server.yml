@@ -39,11 +39,11 @@ jobs:
       - name: Install dependencies
         run: |
           echo "📦 Installing tools..."
-          npm install -g @playwright/mcp@latest
-          npx playwright install-deps chromium
+          npm install -g @playwright/mcp@0.0.84
+          npx -y playwright@1.64.1 install-deps chromium
 
           echo "🥷 Installing CloakBrowser stealth binary..."
-          npm install cloakbrowser@0.6.5 playwright-core
+          npm install cloakbrowser@0.6.5 playwright-core@1.64.1
           node --input-type=module -e "import{ensureBinary}from'cloakbrowser';const p=await ensureBinary();console.log('✅ Binary:',p)"
           CLOAK_PATH=$(find ~/.cloakbrowser -name "chrome" -type f | head -1)
           if [ -z "$CLOAK_PATH" ]; then
@@ -61,12 +61,14 @@ jobs:
 
           echo "🖥️ Installing terminal-mcp-server..."
           git clone https://github.com/weidwonder/terminal-mcp-server.git /tmp/terminal-mcp
-          cd /tmp/terminal-mcp && npm install && npm run build
+          cd /tmp/terminal-mcp && git checkout c09db33e0cfd93cec179e759eb5ffd836db46e39 && npm install && npm run build
           cd -
-          pip install "mcp-proxy" "mcp<2"
+          pip install "mcp-proxy==0.14.0" "mcp==1.30.0"
 
-          echo "☁️ Installing rclone..."
-          curl -s https://rclone.org/install.sh | sudo bash
+          echo "☁️ Installing rclone v1.75.2..."
+          curl -sL "https://downloads.rclone.org/v1.75.2/rclone-v1.75.2-linux-amd64.zip" -o /tmp/rclone.zip
+          unzip -oq /tmp/rclone.zip -d /tmp/rclone-extract
+          sudo cp /tmp/rclone-extract/rclone-v1.75.2-linux-amd64/rclone /usr/local/bin/
           echo "✅ rclone $(rclone --version | head -1) ready!"
 
           echo "📥 Downloading bore..."
@@ -89,7 +91,7 @@ jobs:
         run: |
           echo "🎭 Starting Playwright MCP (CloakBrowser stealth) on :$MCP_PORT..."
           PLAYWRIGHT_MCP_BROWSER=chromium PLAYWRIGHT_MCP_HEADLESS=true \
-          npx @playwright/mcp@latest \
+          npx @playwright/mcp@0.0.84 \
             --config stealth-config.json \
             --headless \
             --port $MCP_PORT \
@@ -113,6 +115,7 @@ jobs:
             --port $TERMINAL_PORT \
             --host 0.0.0.0 \
             --allow-origin '*' \
+            --allowed-host 'bore.pub:*' \
             -- node /tmp/terminal-mcp/build/index.js \
             > /tmp/terminal.log 2>&1 &
           sleep 4
@@ -210,7 +213,7 @@ jobs:
           export PATH=$PATH:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/emulator:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin
 
           echo "📱 Installing mobile-mcp..."
-          npm install -g @mobilenext/mobile-mcp@latest
+          npm install -g @mobilenext/mobile-mcp@1.0.16
 
           echo "🔧 Enabling KVM hardware acceleration..."
           sudo chown -R $USER /dev/kvm 2>/dev/null || true
@@ -457,7 +460,8 @@ jobs:
           mcp-proxy \
             --port $ANDROID_PORT \
             --host 0.0.0.0 \
-            -- npx @mobilenext/mobile-mcp@latest \
+            --allowed-host 'bore.pub:*' \
+            -- npx @mobilenext/mobile-mcp@1.0.16 \
             > /tmp/android-mcp.log 2>&1 &
 
           for i in $(seq 1 30); do
@@ -502,7 +506,7 @@ jobs:
             fuser -k $MCP_PORT/tcp 2>/dev/null || true
             sleep 1
             PLAYWRIGHT_MCP_BROWSER=chromium PLAYWRIGHT_MCP_HEADLESS=true \
-            npx @playwright/mcp@latest \
+            npx @playwright/mcp@0.0.84 \
               --config stealth-config.json \
               --headless \
               --port $MCP_PORT \
@@ -529,6 +533,7 @@ jobs:
               --port $TERMINAL_PORT \
               --host 0.0.0.0 \
               --allow-origin '*' \
+              --allowed-host 'bore.pub:*' \
               -- node /tmp/terminal-mcp/build/index.js \
               > /tmp/terminal.log 2>&1 &
             for i in $(seq 1 10); do
@@ -570,7 +575,8 @@ jobs:
             mcp-proxy \
               --port $ANDROID_PORT \
               --host 0.0.0.0 \
-              -- npx @mobilenext/mobile-mcp@latest \
+              --allowed-host 'bore.pub:*' \
+              -- npx @mobilenext/mobile-mcp@1.0.16 \
               > /tmp/android-mcp.log 2>&1 &
             for i in $(seq 1 15); do
               nc -z localhost $ANDROID_PORT 2>/dev/null && echo "✅ Android MCP restarted!" && return 0
